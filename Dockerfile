@@ -3,7 +3,7 @@ WORKDIR /web
 COPY web/package*.json ./
 RUN npm ci
 COPY web/ ./
-RUN npx tsr generate && npm run build
+RUN npm run build
 
 FROM golang:1.24-alpine AS builder
 RUN apk add --no-cache gcc musl-dev
