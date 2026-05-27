@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -239,20 +240,17 @@ func (s *Store) UseInvite(ctx context.Context, token string) error {
 }
 
 // VerifyPassword checks a plaintext password against an argon2id hash.
+// Hash format: "argon2id$<salt_hex>$<hash_hex>"
 func VerifyPassword(hash, password string) bool {
-	// hash format: "argon2id$<salt_hex>$<hash_hex>"
-	var salt, expected []byte
-	var saltHex, hashHex string
-	n, err := fmt.Sscanf(hash, "argon2id$%s$%s", &saltHex, &hashHex)
-	_ = n
+	parts := strings.SplitN(hash, "$", 3)
+	if len(parts) != 3 || parts[0] != "argon2id" {
+		return false
+	}
+	salt, err := hex.DecodeString(parts[1])
 	if err != nil {
 		return false
 	}
-	salt, err = hex.DecodeString(saltHex)
-	if err != nil {
-		return false
-	}
-	expected, err = hex.DecodeString(hashHex)
+	expected, err := hex.DecodeString(parts[2])
 	if err != nil {
 		return false
 	}
