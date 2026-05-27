@@ -1,0 +1,2 @@
+ALTER TABLE users ADD COLUMN oidc_sub TEXT UNIQUE;
+ALTER TABLE users ADD COLUMN oidc_issuer TEXT;

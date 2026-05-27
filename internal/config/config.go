@@ -16,6 +16,10 @@ type Config struct {
 	AbsURL         string
 	AbsAPIKey      string
 	TMDBAPIKey     string
+
+	OIDCIssuer       string // OIDC_ISSUER
+	OIDCClientID     string // OIDC_CLIENT_ID
+	OIDCClientSecret string // OIDC_CLIENT_SECRET
 }
 
 func Load() (*Config, error) {
@@ -30,6 +34,10 @@ func Load() (*Config, error) {
 		AbsURL:         env("ABS_URL", ""),
 		AbsAPIKey:      env("ABS_API_KEY", ""),
 		TMDBAPIKey:     env("TMDB_API_KEY", ""),
+
+		OIDCIssuer:       env("OIDC_ISSUER", ""),
+		OIDCClientID:     env("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret: env("OIDC_CLIENT_SECRET", ""),
 	}
 
 	if cfg.NodeName == "" {
