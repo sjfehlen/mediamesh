@@ -786,9 +786,24 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, v interface{}, va
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("write json", "err", err)
+	// Encode nil slices as [] not null so the frontend doesn't need null checks.
+	if v == nil {
+		_, _ = w.Write([]byte("null\n"))
+		return
 	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("write json marshal", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	// Replace null JSON arrays with empty arrays.
+	if string(b) == "null" {
+		b = []byte("[]")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(b)
+	_, _ = w.Write([]byte("\n"))
 }
 
 func extractToken(r *http.Request) string {
