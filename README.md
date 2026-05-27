@@ -1,5 +1,9 @@
 # MediaMesh
 
+> [!WARNING]
+> **This project is in early development and is not yet operational.**
+> Nothing here is ready for use. APIs will change, data will be lost between schema migrations, and large parts of the system are not yet implemented. Do not deploy this expecting it to work.
+
 A self-hosted, decentralized media sharing mesh. Each participant runs the same Docker container. Nodes peer via invites and share a unified catalog across Jellyfin (movies, TV) and Audiobookshelf (audiobooks, ebooks). Users can request media from any peer; transfers run automatically and trigger local library rescans.
 
 No central server. No third-party dependency. Each person controls their own node.
