@@ -1,0 +1,8 @@
+mediamesh
+*.db
+*.db-shm
+*.db-wal
+/data/
+web/node_modules/
+web/dist/
+.env

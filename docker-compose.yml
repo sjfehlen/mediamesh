@@ -1,0 +1,24 @@
+services:
+  mediamesh:
+    image: ghcr.io/sjfehlen/mediamesh:latest
+    container_name: mediamesh
+    restart: unless-stopped
+    environment:
+      NODE_NAME: "Sam"
+      PUBLIC_URL: "https://mediamesh.fehlenfusion.com"
+      DATA_DIR: "/data"
+      JELLYFIN_URL: "http://10.5.1.57:30013"
+      JELLYFIN_API_KEY: ""
+      ABS_URL: "http://10.5.1.57:30067"
+      ABS_API_KEY: ""
+      TMDB_API_KEY: ""
+    volumes:
+      - /mnt/Storage/Application/MediaMesh:/data
+      - /mnt/Storage/Media/Movies:/media/movies
+      - /mnt/Storage/Media/TV:/media/tv
+      - /mnt/Storage/Media/Audiobooks:/media/audiobooks
+      - /mnt/Storage/Media/Books:/media/ebooks
+      - /mnt/Storage/Media/KidsAudiobooks:/media/kids-audiobooks
+      - /mnt/Storage/Media/KidsEbooks:/media/kids-ebooks
+    ports:
+      - "30090:8080"
