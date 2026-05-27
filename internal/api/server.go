@@ -92,6 +92,9 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/api/auth/oidc", s.handleOIDCRedirect)
 	r.Get("/api/auth/oidc/callback", s.handleOIDCCallback)
 
+	// Bootstrap — only works when zero users exist.
+	r.Post("/api/auth/bootstrap", s.handleBootstrap)
+
 	// WebSocket — session required.
 	r.With(s.auth.Middleware).Get("/api/ws", s.handleWS)
 
@@ -617,6 +620,45 @@ func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, entries)
+}
+
+// --- Bootstrap handler ---
+
+func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
+	// Only works when no users exist — becomes a no-op once any admin is created.
+	var count int
+	if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if count > 0 {
+		http.Error(w, "bootstrap unavailable: users already exist", http.StatusForbidden)
+		return
+	}
+
+	var body struct {
+		Username string `json:"username" validate:"required,min=2"`
+		Password string `json:"password" validate:"required,min=8"`
+	}
+	if !decodeAndValidate(w, r, &body, s.validate) {
+		return
+	}
+
+	u, err := s.users.Create(r.Context(), body.Username, body.Username, body.Password, "admin")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	token, err := s.auth.CreateSession(r.Context(), u.ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("bootstrap admin created", "username", u.Username)
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{"token": token, "user_id": u.ID})
 }
 
 // --- Webhook handlers ---
