@@ -180,6 +180,9 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/api/v1/transfers", s.handleTransfersList)
 	})
 
+	// Serve React frontend for all non-API routes.
+	r.Handle("/*", staticHandler())
+
 	return r
 }
 
