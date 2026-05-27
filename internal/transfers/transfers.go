@@ -51,12 +51,18 @@ type Transfer struct {
 	CompletedAt *time.Time
 }
 
+// EventDispatcher fires webhook events. Matches webhooks.EventDispatcher.
+type EventDispatcher interface {
+	Fire(ctx context.Context, event string, data any)
+}
+
 // Engine manages the transfer lifecycle.
 type Engine struct {
-	db    *sql.DB
-	peers *peers.Manager
-	cfg   *config.Config
-	audit *audit.Log
+	db         *sql.DB
+	peers      *peers.Manager
+	cfg        *config.Config
+	audit      *audit.Log
+	dispatcher EventDispatcher
 
 	mu      sync.Mutex
 	active  int
@@ -66,13 +72,14 @@ type Engine struct {
 }
 
 // NewEngine creates a new transfer Engine.
-func NewEngine(db *sql.DB, p *peers.Manager, cfg *config.Config, a *audit.Log) *Engine {
+func NewEngine(db *sql.DB, p *peers.Manager, cfg *config.Config, a *audit.Log, d EventDispatcher) *Engine {
 	return &Engine{
-		db:      db,
-		peers:   p,
-		cfg:     cfg,
-		audit:   a,
-		maxConc: 2,
+		db:         db,
+		peers:      p,
+		cfg:        cfg,
+		audit:      a,
+		dispatcher: d,
+		maxConc:    2,
 	}
 }
 
@@ -315,6 +322,13 @@ func (e *Engine) executeTransfer(ctx context.Context, t *Transfer) error {
 		TransferID: t.ID,
 		Status:     "complete",
 	})
+	if e.dispatcher != nil {
+		e.dispatcher.Fire(ctx, "transfer.complete", map[string]any{
+			"transfer_id": t.ID,
+			"item_id":     t.ItemID,
+			"peer_id":     t.PeerID,
+		})
+	}
 
 	// Rescan.
 	_ = e.RescanLocal(ctx, string(item.MediaType))
@@ -445,6 +459,12 @@ func (e *Engine) markFailed(ctx context.Context, id, errMsg string) {
 		TransferID: id,
 		Status:     "failed",
 	})
+	if e.dispatcher != nil {
+		e.dispatcher.Fire(ctx, "transfer.failed", map[string]any{
+			"transfer_id": id,
+			"error":       errMsg,
+		})
+	}
 }
 
 // List returns all transfers.

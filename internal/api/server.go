@@ -22,22 +22,24 @@ import (
 	"github.com/sjfehlen/mediamesh/internal/requests"
 	"github.com/sjfehlen/mediamesh/internal/transfers"
 	"github.com/sjfehlen/mediamesh/internal/users"
+	"github.com/sjfehlen/mediamesh/internal/webhooks"
 )
 
 // Server holds all service references.
 type Server struct {
-	cfg       *config.Config
-	db        *sql.DB
-	identity  *identity.Identity
-	users     *users.Store
-	auth      *auth.Manager
-	scanner   *catalog.Scanner
-	peers     *peers.Manager
-	requests  *requests.Store
-	transfers *transfers.Engine
-	audit     *audit.Log
-	validate  *validator.Validate
-	hub       *Hub
+	cfg        *config.Config
+	db         *sql.DB
+	identity   *identity.Identity
+	users      *users.Store
+	auth       *auth.Manager
+	scanner    *catalog.Scanner
+	peers      *peers.Manager
+	requests   *requests.Store
+	transfers  *transfers.Engine
+	audit      *audit.Log
+	dispatcher *webhooks.Dispatcher
+	validate   *validator.Validate
+	hub        *Hub
 }
 
 // New creates a new API server.
@@ -52,23 +54,25 @@ func New(
 	req *requests.Store,
 	tr *transfers.Engine,
 	al *audit.Log,
+	dispatcher *webhooks.Dispatcher,
 ) *Server {
 	hub := NewHub()
 	tr.SetHub(hub)
 
 	return &Server{
-		cfg:       cfg,
-		db:        db,
-		identity:  id,
-		users:     u,
-		auth:      a,
-		scanner:   scanner,
-		peers:     p,
-		requests:  req,
-		transfers: tr,
-		audit:     al,
-		validate:  validator.New(),
-		hub:       hub,
+		cfg:        cfg,
+		db:         db,
+		identity:   id,
+		users:      u,
+		auth:       a,
+		scanner:    scanner,
+		peers:      p,
+		requests:   req,
+		transfers:  tr,
+		audit:      al,
+		dispatcher: dispatcher,
+		validate:   validator.New(),
+		hub:        hub,
 	}
 }
 
@@ -139,9 +143,64 @@ func (s *Server) Handler() http.Handler {
 		r.Delete("/api/users/sessions/{id}", s.handleSessionRevoke)
 
 		r.Get("/api/audit", s.handleAuditList)
+
+		// Webhook management.
+		r.Get("/api/webhooks", s.handleWebhookList)
+		r.Post("/api/webhooks", s.handleWebhookCreate)
+		r.Delete("/api/webhooks/{id}", s.handleWebhookDelete)
+		r.Patch("/api/webhooks/{id}/enabled", s.handleWebhookSetEnabled)
+		r.Get("/api/webhooks/{id}/deliveries", s.handleWebhookDeliveries)
+
+		// API key management.
+		r.Get("/api/apikeys", s.handleAPIKeyList)
+		r.Post("/api/apikeys", s.handleAPIKeyCreate)
+		r.Delete("/api/apikeys/{id}", s.handleAPIKeyRevoke)
+	})
+
+	// API key authenticated routes — same scoped access as session auth but for machines.
+	// Accepts "Authorization: Bearer mm_<key>" with scope enforcement.
+	r.Group(func(r chi.Router) {
+		r.Use(s.apiKeyMiddleware(webhooks.ScopeLibraryRead))
+		r.Get("/api/v1/library", s.handleLibraryList)
+		r.Get("/api/v1/library/{id}", s.handleLibraryItem)
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(s.apiKeyMiddleware(webhooks.ScopeRequestsRead))
+		r.Get("/api/v1/requests", s.handleRequestsList)
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(s.apiKeyMiddleware(webhooks.ScopeRequestsWrite))
+		r.Post("/api/v1/requests", s.handleRequestSubmit)
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(s.apiKeyMiddleware(webhooks.ScopeTransfersRead))
+		r.Get("/api/v1/transfers", s.handleTransfersList)
 	})
 
 	return r
+}
+
+// apiKeyMiddleware authenticates requests using a Bearer API key and enforces a required scope.
+func (s *Server) apiKeyMiddleware(requiredScope string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw := extractToken(r)
+			if raw == "" || !strings.HasPrefix(raw, "mm_") {
+				http.Error(w, "api key required", http.StatusUnauthorized)
+				return
+			}
+			key, err := webhooks.ValidateAPIKey(r.Context(), s.db, raw)
+			if err != nil {
+				http.Error(w, "invalid or revoked api key", http.StatusUnauthorized)
+				return
+			}
+			if !key.HasScope(requiredScope) {
+				http.Error(w, "insufficient scope", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // --- Auth handlers ---
@@ -558,6 +617,110 @@ func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, entries)
+}
+
+// --- Webhook handlers ---
+
+func (s *Server) handleWebhookList(w http.ResponseWriter, r *http.Request) {
+	list, err := webhooks.List(r.Context(), s.db)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, list)
+}
+
+func (s *Server) handleWebhookCreate(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromContext(r.Context())
+	var body struct {
+		Name   string   `json:"name"   validate:"required"`
+		URL    string   `json:"url"    validate:"required,url"`
+		Events []string `json:"events" validate:"required,min=1"`
+	}
+	if !decodeAndValidate(w, r, &body, s.validate) {
+		return
+	}
+	wh, rawSecret, err := webhooks.Create(r.Context(), s.db, body.Name, body.URL, u.ID, body.Events)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Return secret only on creation.
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]any{"webhook": wh, "secret": rawSecret})
+}
+
+func (s *Server) handleWebhookDelete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := webhooks.Delete(r.Context(), s.db, id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleWebhookSetEnabled(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := webhooks.SetEnabled(r.Context(), s.db, id, body.Enabled); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleWebhookDeliveries(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	deliveries, err := webhooks.Deliveries(r.Context(), s.db, id, 50)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, deliveries)
+}
+
+// --- API key handlers ---
+
+func (s *Server) handleAPIKeyList(w http.ResponseWriter, r *http.Request) {
+	keys, err := webhooks.ListAPIKeys(r.Context(), s.db)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, keys)
+}
+
+func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromContext(r.Context())
+	var body struct {
+		Name   string   `json:"name"   validate:"required"`
+		Scopes []string `json:"scopes" validate:"required,min=1"`
+	}
+	if !decodeAndValidate(w, r, &body, s.validate) {
+		return
+	}
+	key, rawKey, err := webhooks.CreateAPIKey(r.Context(), s.db, body.Name, u.ID, body.Scopes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]any{"key": key, "raw_key": rawKey})
+}
+
+func (s *Server) handleAPIKeyRevoke(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := webhooks.RevokeAPIKey(r.Context(), s.db, id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Helpers ---

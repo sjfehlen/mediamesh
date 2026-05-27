@@ -1,26 +1,86 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import {
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  getPaginationRowModel,
+  flexRender,
+  createColumnHelper,
+  type SortingState,
+} from '@tanstack/react-table'
 import { api, type AuditEntry } from '../api/client'
 
+const columnHelper = createColumnHelper<AuditEntry>()
+
+const columns = [
+  columnHelper.accessor('occurred_at', {
+    header: 'Time',
+    cell: (info) => (
+      <span className="whitespace-nowrap text-gray-500">
+        {new Date(info.getValue()).toLocaleString()}
+      </span>
+    ),
+  }),
+  columnHelper.display({
+    id: 'actor',
+    header: 'Actor',
+    cell: ({ row }) => (
+      <span className="font-mono">
+        {row.original.actor_id
+          ? `${row.original.actor_id.slice(0, 8)}…`
+          : row.original.actor_type}
+      </span>
+    ),
+    enableSorting: false,
+  }),
+  columnHelper.accessor('action', {
+    header: 'Action',
+    cell: (info) => <span className="font-medium">{info.getValue()}</span>,
+  }),
+  columnHelper.display({
+    id: 'target',
+    header: 'Target',
+    cell: ({ row }) =>
+      row.original.target_type
+        ? `${row.original.target_type}/${row.original.target_id?.slice(0, 8)}`
+        : '—',
+    enableSorting: false,
+  }),
+  columnHelper.accessor('detail', {
+    header: 'Detail',
+    cell: (info) => (
+      <span className="text-gray-500 truncate block max-w-xs">{info.getValue()}</span>
+    ),
+    enableSorting: false,
+  }),
+]
+
 export default function AuditLog() {
-  const [entries, setEntries] = useState<AuditEntry[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [sorting, setSorting] = useState<SortingState>([])
   const [actorFilter, setActorFilter] = useState('')
   const [actionFilter, setActionFilter] = useState('')
 
-  useEffect(() => {
-    setLoading(true)
-    const params = new URLSearchParams()
-    if (actorFilter) params.set('actor_id', actorFilter)
-    if (actionFilter) params.set('action', actionFilter)
-    params.set('limit', '200')
+  const { data: entries = [], isLoading, error } = useQuery({
+    queryKey: ['audit', actorFilter, actionFilter],
+    queryFn: () => {
+      const params = new URLSearchParams({ limit: '200' })
+      if (actorFilter) params.set('actor_id', actorFilter)
+      if (actionFilter) params.set('action', actionFilter)
+      return api.get<AuditEntry[]>(`/api/audit?${params}`)
+    },
+  })
 
-    api
-      .get<AuditEntry[]>(`/api/audit?${params}`)
-      .then(setEntries)
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [actorFilter, actionFilter])
+  const table = useReactTable({
+    data: entries,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    initialState: { pagination: { pageSize: 50 } },
+  })
 
   return (
     <div className="p-6 space-y-4">
@@ -43,47 +103,75 @@ export default function AuditLog() {
         />
       </div>
 
-      {error && <p className="text-red-500">{error}</p>}
+      {error && <p className="text-red-500">{(error as Error).message}</p>}
 
-      {loading ? (
+      {isLoading ? (
         <p className="text-gray-500">Loading…</p>
       ) : (
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="border-b text-left">
-              <th className="pb-2 pr-4">Time</th>
-              <th className="pb-2 pr-4">Actor</th>
-              <th className="pb-2 pr-4">Action</th>
-              <th className="pb-2 pr-4">Target</th>
-              <th className="pb-2">Detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="pt-4 text-gray-500">
-                  No entries.
-                </td>
-              </tr>
-            ) : (
-              entries.map((e) => (
-                <tr key={e.id} className="border-b hover:bg-gray-50 text-xs">
-                  <td className="py-1.5 pr-4 text-gray-500 whitespace-nowrap">
-                    {new Date(e.occurred_at).toLocaleString()}
-                  </td>
-                  <td className="py-1.5 pr-4 font-mono">
-                    {e.actor_id ? `${e.actor_id.slice(0, 8)}…` : e.actor_type}
-                  </td>
-                  <td className="py-1.5 pr-4 font-medium">{e.action}</td>
-                  <td className="py-1.5 pr-4 text-gray-600">
-                    {e.target_type && `${e.target_type}/${e.target_id?.slice(0, 8)}`}
-                  </td>
-                  <td className="py-1.5 text-gray-500 truncate max-w-xs">{e.detail}</td>
+        <>
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              {table.getHeaderGroups().map((hg) => (
+                <tr key={hg.id} className="border-b text-left">
+                  {hg.headers.map((header) => (
+                    <th
+                      key={header.id}
+                      className="pb-2 pr-4 select-none cursor-pointer"
+                      onClick={header.column.getToggleSortingHandler()}
+                    >
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {header.column.getIsSorted() === 'asc'
+                        ? ' ↑'
+                        : header.column.getIsSorted() === 'desc'
+                          ? ' ↓'
+                          : ''}
+                    </th>
+                  ))}
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ))}
+            </thead>
+            <tbody>
+              {table.getRowModel().rows.length === 0 ? (
+                <tr>
+                  <td colSpan={columns.length} className="pt-4 text-gray-500">
+                    No entries.
+                  </td>
+                </tr>
+              ) : (
+                table.getRowModel().rows.map((row) => (
+                  <tr key={row.id} className="border-b hover:bg-gray-50">
+                    {row.getVisibleCells().map((cell) => (
+                      <td key={cell.id} className="py-1.5 pr-4">
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+
+          {/* Pagination */}
+          <div className="flex items-center gap-3 text-sm">
+            <button
+              onClick={() => table.previousPage()}
+              disabled={!table.getCanPreviousPage()}
+              className="px-2 py-1 border rounded disabled:opacity-40"
+            >
+              ← Prev
+            </button>
+            <span>
+              Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
+            </span>
+            <button
+              onClick={() => table.nextPage()}
+              disabled={!table.getCanNextPage()}
+              className="px-2 py-1 border rounded disabled:opacity-40"
+            >
+              Next →
+            </button>
+          </div>
+        </>
       )}
     </div>
   )

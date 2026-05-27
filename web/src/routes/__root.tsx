@@ -11,6 +11,9 @@ export const Route = createRootRoute({
           { to: '/requests', label: 'Requests' },
           { to: '/transfers', label: 'Transfers' },
           { to: '/peers', label: 'Peers' },
+          { to: '/users', label: 'Users' },
+          { to: '/audit', label: 'Audit' },
+          { to: '/settings', label: 'Settings' },
         ].map(({ to, label }) => (
           <Link
             key={to}

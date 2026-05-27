@@ -23,15 +23,21 @@ type Request struct {
 	ReviewedAt  *time.Time
 }
 
+// EventDispatcher fires webhook events. Matches webhooks.EventDispatcher.
+type EventDispatcher interface {
+	Fire(ctx context.Context, event string, data any)
+}
+
 // Store manages media requests.
 type Store struct {
-	db    *sql.DB
-	audit *audit.Log
+	db         *sql.DB
+	audit      *audit.Log
+	dispatcher EventDispatcher
 }
 
 // NewStore creates a new request Store.
-func NewStore(db *sql.DB, a *audit.Log) *Store {
-	return &Store{db: db, audit: a}
+func NewStore(db *sql.DB, a *audit.Log, d EventDispatcher) *Store {
+	return &Store{db: db, audit: a, dispatcher: d}
 }
 
 // Submit creates a new request.
@@ -100,7 +106,11 @@ func (s *Store) Submit(ctx context.Context, userID, itemID, note string) (*Reque
 		Detail:     itemID,
 	})
 
-	return s.get(ctx, id)
+	req, err := s.get(ctx, id)
+	if err == nil && s.dispatcher != nil {
+		s.dispatcher.Fire(ctx, "request.submitted", req)
+	}
+	return req, err
 }
 
 // Approve approves a pending request.
@@ -120,7 +130,11 @@ func (s *Store) Approve(ctx context.Context, requestID, reviewerID, note string)
 		TargetType: "request",
 		TargetID:   requestID,
 	})
-	return s.get(ctx, requestID)
+	req, err := s.get(ctx, requestID)
+	if err == nil && s.dispatcher != nil {
+		s.dispatcher.Fire(ctx, "request.approved", req)
+	}
+	return req, err
 }
 
 // Reject rejects a request.
@@ -140,7 +154,11 @@ func (s *Store) Reject(ctx context.Context, requestID, reviewerID, note string) 
 		TargetType: "request",
 		TargetID:   requestID,
 	})
-	return s.get(ctx, requestID)
+	req, err := s.get(ctx, requestID)
+	if err == nil && s.dispatcher != nil {
+		s.dispatcher.Fire(ctx, "request.rejected", req)
+	}
+	return req, err
 }
 
 // List returns requests. Admin sees all; user sees their own.
