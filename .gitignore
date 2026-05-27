@@ -1,4 +1,4 @@
-mediamesh
+/mediamesh
 *.db
 *.db-shm
 *.db-wal
