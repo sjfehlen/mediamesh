@@ -75,9 +75,12 @@ func (f *Fetcher) EnrichAll(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// StartScheduled runs EnrichAll on the given interval.
+// StartScheduled runs EnrichAll immediately and then on the given interval.
 func (f *Fetcher) StartScheduled(ctx context.Context, db *sql.DB, interval time.Duration) {
 	go func() {
+		if err := f.EnrichAll(ctx, db); err != nil {
+			slog.Error("initial enrich failed", "err", err)
+		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
