@@ -17,19 +17,19 @@ import (
 
 // User maps all columns from the users table.
 type User struct {
-	ID          string
-	Username    string
-	DisplayName string
-	PasswordHash string
-	Role        string
-	AutoApprove bool
-	CanRequest  bool
-	QuotaGB     *int64
-	Libraries   *string
-	CreatedAt   time.Time
-	DisabledAt  *time.Time
-	OIDCSub     *string
-	OIDCIssuer  *string
+	ID           string     `json:"id"`
+	Username     string     `json:"username"`
+	DisplayName  string     `json:"display_name"`
+	PasswordHash string     `json:"-"` // never serialise
+	Role         string     `json:"role"`
+	AutoApprove  bool       `json:"auto_approve"`
+	CanRequest   bool       `json:"can_request"`
+	QuotaGB      *int64     `json:"quota_gb,omitempty"`
+	Libraries    *string    `json:"libraries,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	DisabledAt   *time.Time `json:"disabled_at,omitempty"`
+	OIDCSub      *string    `json:"oidc_sub,omitempty"`
+	OIDCIssuer   *string    `json:"oidc_issuer,omitempty"`
 }
 
 // Store provides user management backed by SQLite.

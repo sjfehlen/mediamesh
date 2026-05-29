@@ -57,14 +57,14 @@ func nullIfEmpty(s string) interface{} {
 
 // AuditEntry is the full row returned from the audit log.
 type AuditEntry struct {
-	ID         string
-	ActorID    string
-	ActorType  string
-	Action     string
-	TargetType string
-	TargetID   string
-	Detail     string
-	OccurredAt time.Time
+	ID         string    `json:"id"`
+	ActorID    string    `json:"actor_id"`
+	ActorType  string    `json:"actor_type"`
+	Action     string    `json:"action"`
+	TargetType string    `json:"target_type"`
+	TargetID   string    `json:"target_id"`
+	Detail     string    `json:"detail"`
+	OccurredAt time.Time `json:"occurred_at"`
 }
 
 // List returns audit entries with optional filters.

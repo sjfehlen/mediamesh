@@ -12,15 +12,15 @@ import (
 
 // Request maps a requests table row.
 type Request struct {
-	ID          string
-	UserID      string
-	ItemID      string
-	Status      string
-	Note        *string
-	ReviewedBy  *string
-	ReviewNote  *string
-	RequestedAt time.Time
-	ReviewedAt  *time.Time
+	ID          string     `json:"id"`
+	UserID      string     `json:"user_id"`
+	ItemID      string     `json:"item_id"`
+	Status      string     `json:"status"`
+	Note        *string    `json:"note,omitempty"`
+	ReviewedBy  *string    `json:"reviewed_by,omitempty"`
+	ReviewNote  *string    `json:"review_note,omitempty"`
+	RequestedAt time.Time  `json:"requested_at"`
+	ReviewedAt  *time.Time `json:"reviewed_at,omitempty"`
 }
 
 // EventDispatcher fires webhook events. Matches webhooks.EventDispatcher.

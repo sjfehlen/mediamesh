@@ -23,12 +23,12 @@ import (
 
 // Peer maps a peers table row.
 type Peer struct {
-	ID          string
-	DisplayName string
-	Endpoint    string
-	PublicKey   []byte
-	Status      string
-	AddedAt     time.Time
+	ID          string    `json:"id"`
+	DisplayName string    `json:"display_name"`
+	Endpoint    string    `json:"endpoint"`
+	PublicKey   []byte    `json:"public_key,omitempty"`
+	Status      string    `json:"status"`
+	AddedAt     time.Time `json:"added_at"`
 }
 
 // Manager manages peer relationships.

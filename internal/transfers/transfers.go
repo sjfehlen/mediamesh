@@ -38,17 +38,17 @@ type ProgressEvent struct {
 
 // Transfer maps a transfers table row.
 type Transfer struct {
-	ID          string
-	RequestID   string
-	PeerID      string
-	ItemID      string
-	Status      string
-	BytesTotal  *int64
-	BytesDone   int64
-	Error       *string
-	QueuedAt    time.Time
-	StartedAt   *time.Time
-	CompletedAt *time.Time
+	ID          string     `json:"id"`
+	RequestID   string     `json:"request_id"`
+	PeerID      string     `json:"peer_id"`
+	ItemID      string     `json:"item_id"`
+	Status      string     `json:"status"`
+	BytesTotal  *int64     `json:"bytes_total,omitempty"`
+	BytesDone   int64      `json:"bytes_done"`
+	Error       *string    `json:"error,omitempty"`
+	QueuedAt    time.Time  `json:"queued_at"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 // EventDispatcher fires webhook events. Matches webhooks.EventDispatcher.

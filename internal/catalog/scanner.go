@@ -31,24 +31,24 @@ const (
 
 // Item maps a library_items row.
 type Item struct {
-	ID           string
-	PeerID       *string
-	MediaType    MediaType
-	Title        string
-	Year         *int
-	Series       *string
-	SeasonNum    *int
-	EpisodeNum   *int
-	RelativePath string
-	FileSize     *int64
-	TmdbID       *int64
-	OlKey        *string
-	PosterURL    *string
-	Description  *string
-	Rating       *float64
-	Genres       *string
-	LastSeen     time.Time
-	MetadataAt   *time.Time
+	ID           string     `json:"id"`
+	PeerID       *string    `json:"peer_id,omitempty"`
+	MediaType    MediaType  `json:"media_type"`
+	Title        string     `json:"title"`
+	Year         *int       `json:"year,omitempty"`
+	Series       *string    `json:"series,omitempty"`
+	SeasonNum    *int       `json:"season_num,omitempty"`
+	EpisodeNum   *int       `json:"episode_num,omitempty"`
+	RelativePath string     `json:"relative_path"`
+	FileSize     *int64     `json:"file_size,omitempty"`
+	TmdbID       *int64     `json:"tmdb_id,omitempty"`
+	OlKey        *string    `json:"ol_key,omitempty"`
+	PosterURL    *string    `json:"poster_url,omitempty"`
+	Description  *string    `json:"description,omitempty"`
+	Rating       *float64   `json:"rating,omitempty"`
+	Genres       *string    `json:"genres,omitempty"`
+	LastSeen     time.Time  `json:"last_seen"`
+	MetadataAt   *time.Time `json:"metadata_at,omitempty"`
 }
 
 // Scanner walks media roots and upserts library items.
