@@ -665,13 +665,13 @@ func (s *Server) handlePeerCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var items []peers.CatalogItem
-	if err := json.NewDecoder(r.Body).Decode(&items); err != nil {
+	var push peers.CatalogPush
+	if err := json.NewDecoder(r.Body).Decode(&push); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
-	if err := s.peers.ReceiveCatalog(r.Context(), peer.ID, items); err != nil {
+	if err := s.peers.ReceiveCatalog(r.Context(), peer.ID, push); err != nil {
 		slog.Error("receive catalog", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

@@ -47,6 +47,8 @@ type Transfer struct {
 	BytesTotal  *int64     `json:"bytes_total,omitempty"`
 	BytesDone   int64      `json:"bytes_done"`
 	Error       *string    `json:"error,omitempty"`
+	RetryCount  int        `json:"retry_count"`
+	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
 	QueuedAt    time.Time  `json:"queued_at"`
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
@@ -74,13 +76,17 @@ type Engine struct {
 
 // NewEngine creates a new transfer Engine.
 func NewEngine(db *sql.DB, p *peers.Manager, cfg *config.Config, a *audit.Log, d EventDispatcher) *Engine {
+	maxConc := cfg.MaxConcurrentTransfers
+	if maxConc <= 0 {
+		maxConc = 2
+	}
 	return &Engine{
 		db:         db,
 		peers:      p,
 		cfg:        cfg,
 		audit:      a,
 		dispatcher: d,
-		maxConc:    2,
+		maxConc:    maxConc,
 	}
 }
 
@@ -144,7 +150,9 @@ func (e *Engine) processQueue(ctx context.Context) {
 	}
 
 	rows, err := e.db.QueryContext(ctx,
-		`SELECT id FROM transfers WHERE status = 'queued' ORDER BY queued_at LIMIT ?`, slots)
+		`SELECT id FROM transfers WHERE status = 'queued'
+		 AND (next_retry_at IS NULL OR next_retry_at <= datetime('now'))
+		 ORDER BY queued_at LIMIT ?`, slots)
 	if err != nil {
 		slog.Error("query queued transfers", "err", err)
 		return
@@ -467,7 +475,33 @@ func AvailableBytes(path string) (int64, error) {
 	return int64(stat.Bavail) * int64(stat.Bsize), nil
 }
 
+// retryBackoff returns the delay before the nth retry attempt (1-indexed).
+// Attempts: 1→1m, 2→5m, 3→15m.
+var retryBackoff = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
+
+const maxRetries = 3
+
 func (e *Engine) markFailed(ctx context.Context, id, errMsg string) {
+	var retryCount int
+	_ = e.db.QueryRowContext(ctx, `SELECT retry_count FROM transfers WHERE id = ?`, id).Scan(&retryCount)
+
+	if retryCount < maxRetries {
+		delay := retryBackoff[retryCount]
+		nextRetry := time.Now().UTC().Add(delay)
+		_, _ = e.db.ExecContext(ctx,
+			`UPDATE transfers SET status = 'queued', error = ?, retry_count = ?, next_retry_at = ? WHERE id = ?`,
+			errMsg, retryCount+1, nextRetry, id)
+		_ = e.audit.Write(ctx, audit.Entry{
+			ActorType:  "system",
+			Action:     "transfer.retry_scheduled",
+			TargetType: "transfer",
+			TargetID:   id,
+			Detail:     fmt.Sprintf("attempt %d/%d in %s: %s", retryCount+1, maxRetries, delay, errMsg),
+		})
+		e.broadcast(ProgressEvent{Type: "transfer.status", TransferID: id, Status: "queued"})
+		return
+	}
+
 	_, _ = e.db.ExecContext(ctx,
 		`UPDATE transfers SET status = 'failed', error = ? WHERE id = ?`, errMsg, id)
 	_ = e.audit.Write(ctx, audit.Entry{
@@ -493,7 +527,7 @@ func (e *Engine) markFailed(ctx context.Context, id, errMsg string) {
 // List returns all transfers.
 func (e *Engine) List(ctx context.Context) ([]*Transfer, error) {
 	rows, err := e.db.QueryContext(ctx,
-		`SELECT id, request_id, peer_id, item_id, status, bytes_total, bytes_done, error, queued_at, started_at, completed_at
+		`SELECT id, request_id, peer_id, item_id, status, bytes_total, bytes_done, error, retry_count, next_retry_at, queued_at, started_at, completed_at
 		 FROM transfers ORDER BY queued_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("transfers.Engine.List: %w", err)
@@ -504,7 +538,7 @@ func (e *Engine) List(ctx context.Context) ([]*Transfer, error) {
 	for rows.Next() {
 		t := &Transfer{}
 		if err := rows.Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.Status,
-			&t.BytesTotal, &t.BytesDone, &t.Error,
+			&t.BytesTotal, &t.BytesDone, &t.Error, &t.RetryCount, &t.NextRetryAt,
 			&t.QueuedAt, &t.StartedAt, &t.CompletedAt); err != nil {
 			return nil, err
 		}
@@ -559,7 +593,7 @@ func (e *Engine) Retry(ctx context.Context, id string) error {
 // ListByRequestID returns all transfers for a given request.
 func (e *Engine) ListByRequestID(ctx context.Context, requestID string) ([]*Transfer, error) {
 	rows, err := e.db.QueryContext(ctx,
-		`SELECT id, request_id, peer_id, item_id, status, bytes_total, bytes_done, error, queued_at, started_at, completed_at
+		`SELECT id, request_id, peer_id, item_id, status, bytes_total, bytes_done, error, retry_count, next_retry_at, queued_at, started_at, completed_at
 		 FROM transfers WHERE request_id = ? ORDER BY queued_at DESC`, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("transfers.Engine.ListByRequestID: %w", err)
@@ -570,7 +604,7 @@ func (e *Engine) ListByRequestID(ctx context.Context, requestID string) ([]*Tran
 	for rows.Next() {
 		t := &Transfer{}
 		if err := rows.Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.Status,
-			&t.BytesTotal, &t.BytesDone, &t.Error,
+			&t.BytesTotal, &t.BytesDone, &t.Error, &t.RetryCount, &t.NextRetryAt,
 			&t.QueuedAt, &t.StartedAt, &t.CompletedAt); err != nil {
 			return nil, fmt.Errorf("transfers.Engine.ListByRequestID: scan: %w", err)
 		}
@@ -582,10 +616,10 @@ func (e *Engine) ListByRequestID(ctx context.Context, requestID string) ([]*Tran
 func (e *Engine) get(ctx context.Context, id string) (*Transfer, error) {
 	t := &Transfer{}
 	err := e.db.QueryRowContext(ctx,
-		`SELECT id, request_id, peer_id, item_id, status, bytes_total, bytes_done, error, queued_at, started_at, completed_at
+		`SELECT id, request_id, peer_id, item_id, status, bytes_total, bytes_done, error, retry_count, next_retry_at, queued_at, started_at, completed_at
 		 FROM transfers WHERE id = ?`, id,
 	).Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.Status,
-		&t.BytesTotal, &t.BytesDone, &t.Error,
+		&t.BytesTotal, &t.BytesDone, &t.Error, &t.RetryCount, &t.NextRetryAt,
 		&t.QueuedAt, &t.StartedAt, &t.CompletedAt)
 	if err != nil {
 		return nil, fmt.Errorf("transfers.Engine.get: %w", err)

@@ -1,0 +1,2 @@
+ALTER TABLE transfers ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE transfers ADD COLUMN next_retry_at DATETIME;

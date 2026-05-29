@@ -1,6 +1,7 @@
 services:
   mediamesh:
-    image: ghcr.io/sjfehlen/mediamesh:latest
+    build: .
+    image: mediamesh:latest
     container_name: mediamesh
     restart: unless-stopped
     environment:

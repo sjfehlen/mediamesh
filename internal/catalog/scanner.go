@@ -368,24 +368,42 @@ func (s *Scanner) upsertItem(ctx context.Context, item *Item) error {
 	_ = s.db.QueryRowContext(ctx, `SELECT 1 FROM library_items WHERE id = ?`, item.ID).Scan(&exists)
 
 	if exists {
+		// Check if anything meaningful changed before bumping the catalog version.
+		var storedSize sql.NullInt64
+		var storedMtime sql.NullTime
+		_ = s.db.QueryRowContext(ctx,
+			`SELECT file_size, file_mtime FROM library_items WHERE id = ?`, item.ID,
+		).Scan(&storedSize, &storedMtime)
+
+		mtimeSame := storedMtime.Valid && item.FileMtime != nil && storedMtime.Time.UTC().Equal(item.FileMtime.UTC())
+		sizeSame := item.FileSize != nil && storedSize.Valid && storedSize.Int64 == *item.FileSize
+		changed := !sizeSame || !mtimeSame
+
+		var cv int64
+		if changed {
+			cv, _ = BumpVersion(ctx, s.db)
+		}
 		_, err := s.db.ExecContext(ctx,
 			`UPDATE library_items SET last_seen = ?, file_size = ?, file_mtime = ?, track_count = ?,
-			  title = ?, series = ?, season_num = ?, episode_num = ?, media_type = ?
+			  title = ?, series = ?, season_num = ?, episode_num = ?, media_type = ?,
+			  catalog_version = CASE WHEN ? THEN ? ELSE catalog_version END
 			 WHERE id = ?`,
 			now, item.FileSize, item.FileMtime, item.TrackCount,
 			item.Title, item.Series, item.SeasonNum, item.EpisodeNum, string(item.MediaType),
+			changed, cv,
 			item.ID)
 		return err
 	}
 
+	cv, _ := BumpVersion(ctx, s.db)
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO library_items
 		  (id, peer_id, media_type, title, year, series, season_num, episode_num,
-		   relative_path, file_size, track_count, file_mtime, last_seen)
-		 VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   relative_path, file_size, track_count, file_mtime, last_seen, catalog_version)
+		 VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID, string(item.MediaType), item.Title, item.Year,
 		item.Series, item.SeasonNum, item.EpisodeNum,
-		item.RelativePath, item.FileSize, item.TrackCount, item.FileMtime, now,
+		item.RelativePath, item.FileSize, item.TrackCount, item.FileMtime, now, cv,
 	)
 	if err != nil {
 		return fmt.Errorf("catalog.upsertItem: %w", err)
