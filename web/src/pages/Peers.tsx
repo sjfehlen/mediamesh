@@ -107,7 +107,7 @@ export default function Peers() {
         <p className="text-sm font-medium text-gray-700">Connect to a peer using their invite:</p>
         <div className="space-y-2">
           <div>
-            <label className="block text-xs text-gray-600 mb-1">Their Server URL</label>
+            <label className="block text-xs text-gray-600 mb-1">Their Server URL <span className="text-red-500">*</span></label>
             <input
               type="text"
               value={redeemUrl}
@@ -115,6 +115,7 @@ export default function Peers() {
               placeholder="https://mediamesh.theirserver.com"
               className="w-full text-sm border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+            <p className="text-xs text-gray-400 mt-0.5">Must be reachable from this server — use an IP or local hostname if the domain isn't set up yet.</p>
           </div>
           <div>
             <label className="block text-xs text-gray-600 mb-1">Invite Code</label>
@@ -129,7 +130,7 @@ export default function Peers() {
         </div>
         <button
           onClick={() => redeemInvite.mutate()}
-          disabled={redeemInvite.isPending || !redeemToken.trim()}
+          disabled={redeemInvite.isPending || !redeemToken.trim() || !redeemUrl.trim()}
           className="px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700 disabled:opacity-50"
         >
           {redeemInvite.isPending ? 'Connecting…' : 'Connect to Peer'}

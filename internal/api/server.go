@@ -587,7 +587,7 @@ func (s *Server) handlePeerInvite(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePeerAccept(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Token    string `json:"token"    validate:"required"`
-		Endpoint string `json:"endpoint"`
+		Endpoint string `json:"endpoint" validate:"required"`
 	}
 	if !decodeAndValidate(w, r, &body, s.validate) {
 		return
