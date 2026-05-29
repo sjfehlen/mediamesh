@@ -102,11 +102,13 @@ func (s *Server) Handler() http.Handler {
 	// WebSocket — session required.
 	r.With(s.auth.Middleware).Get("/api/ws", s.handleWS)
 
+	// Handshake is unauthenticated — the invite token is the proof of identity.
+	r.Post("/api/peer/handshake", s.handlePeerHandshake)
+
 	// Peer-to-peer routes — peer JWT auth.
 	r.Group(func(r chi.Router) {
 		r.Use(s.peers.PeerMiddleware)
 		r.Get("/api/peer/ping", s.handlePeerPing)
-		r.Post("/api/peer/handshake", s.handlePeerHandshake)
 		r.Post("/api/peer/catalog", s.handlePeerCatalog)
 		r.Get("/api/peer/files/{itemID}", s.handlePeerFile)
 	})
