@@ -45,6 +45,9 @@ type Server struct {
 	hub        *Hub
 }
 
+// AppVersion is set by main before the server starts.
+var AppVersion = "dev"
+
 // New creates a new API server.
 func New(
 	cfg *config.Config,
@@ -101,6 +104,10 @@ func (s *Server) Handler() http.Handler {
 
 	// WebSocket — session required.
 	r.With(s.auth.Middleware).Get("/api/ws", s.handleWS)
+
+	r.Get("/api/version", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]string{"version": AppVersion})
+	})
 
 	// Handshake is unauthenticated — the invite token is the proof of identity.
 	r.Post("/api/peer/handshake", s.handlePeerHandshake)

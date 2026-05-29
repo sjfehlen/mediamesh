@@ -1,5 +1,8 @@
 package main
 
+// Version is injected at build time via -ldflags "-X main.Version=<git-sha>".
+var Version = "dev"
+
 import (
 	"context"
 	"log/slog"
@@ -100,6 +103,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	transferEngine.Start(ctx)
 
 	// 12. Init API server.
+	api.AppVersion = Version
 	srv := api.New(cfg, database, id, userStore, authMgr, scanner, peerMgr, requestStore, transferEngine, auditLog, dispatcher)
 	handler := srv.Handler()
 

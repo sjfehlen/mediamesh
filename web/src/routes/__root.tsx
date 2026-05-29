@@ -1,4 +1,5 @@
 import { createRootRoute, Link, Outlet, redirect, useNavigate } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { api, clearToken, getToken } from '../api/client'
 
 export const Route = createRootRoute({
@@ -13,6 +14,11 @@ export const Route = createRootRoute({
 function RootLayout() {
   const navigate = useNavigate()
   const isLoginPage = window.location.pathname === '/login'
+  const { data: versionData } = useQuery({
+    queryKey: ['version'],
+    queryFn: () => api.get<{ version: string }>('/api/version'),
+    staleTime: Infinity,
+  })
 
   if (isLoginPage) {
     return <Outlet />
@@ -41,6 +47,11 @@ function RootLayout() {
             </Link>
           ))}
         </div>
+        {versionData && (
+          <span className="text-xs text-gray-400 font-mono" title="Build version">
+            {versionData.version === 'dev' ? 'dev' : versionData.version.slice(0, 7)}
+          </span>
+        )}
         <button
           onClick={async () => {
             try { await api.post('/api/auth/logout') } catch { /* ignore */ }
