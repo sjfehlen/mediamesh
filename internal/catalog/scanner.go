@@ -264,6 +264,8 @@ func (s *Scanner) scanFileRoot(ctx context.Context, root mediaRoot) (int, error)
 }
 
 // scanAudiobookRoot treats each immediate subfolder as one audiobook.
+// It expects a flat layout: one subfolder per book directly under the root.
+// Two-level author/book layouts are not supported — each top-level folder is treated as one book.
 func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, error) {
 	entries, err := fs.ReadDir(newFS(rootPath), ".")
 	if err != nil {
@@ -283,7 +285,7 @@ func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, 
 		totalSize, trackCount, latestMtime := audiobookDirStats(bookDir)
 
 		rel := entry.Name()
-		key := "local:audiobook:" + rel
+		key := "local:" + rel
 
 		if s.mtimeUnchanged(ctx, key, latestMtime) {
 			continue
@@ -532,7 +534,7 @@ func parseTVEpisode(filename string) *TVEpisodeInfo {
 	episode, _ := strconv.Atoi(m[2])
 	title := strings.TrimSpace(m[3])
 	// Strip trailing quality/codec tags from title (e.g. " 1080p", " BluRay")
-	if idx := indexQualityTag(title); idx > 0 {
+	if idx := indexQualityTag(title); idx >= 0 {
 		title = strings.TrimRight(strings.TrimSpace(title[:idx]), "-–")
 		title = strings.TrimSpace(title)
 	}
