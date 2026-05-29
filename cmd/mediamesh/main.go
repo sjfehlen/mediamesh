@@ -1,8 +1,5 @@
 package main
 
-//go:embed ../../migrations
-var migrationsDir embed.FS
-
 import (
 	"context"
 	"embed"
@@ -30,6 +27,9 @@ import (
 	"github.com/sjfehlen/mediamesh/internal/users"
 	"github.com/sjfehlen/mediamesh/internal/webhooks"
 )
+
+//go:embed ../../migrations
+var migrationsDir embed.FS
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
