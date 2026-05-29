@@ -96,7 +96,8 @@ func (m *Manager) GenerateInvite(ctx context.Context, createdBy string) (string,
 }
 
 // AcceptInvite parses a peer invite JWT, verifies it, and completes the handshake.
-func (m *Manager) AcceptInvite(ctx context.Context, tokenStr string) (*Peer, error) {
+// If endpointOverride is non-empty it takes precedence over the endpoint embedded in the token.
+func (m *Manager) AcceptInvite(ctx context.Context, tokenStr, endpointOverride string) (*Peer, error) {
 	// Parse without verification first to extract the embedded public key.
 	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
 	unverified, _, err := parser.ParseUnverified(tokenStr, jwt.MapClaims{})
@@ -111,6 +112,9 @@ func (m *Manager) AcceptInvite(ctx context.Context, tokenStr string) (*Peer, err
 
 	pubB64, _ := claims["public_key"].(string)
 	endpoint, _ := claims["endpoint"].(string)
+	if endpointOverride != "" {
+		endpoint = endpointOverride
+	}
 	issuer, _ := claims["iss"].(string)
 
 	pubKeyBytes, err := base64.StdEncoding.DecodeString(pubB64)

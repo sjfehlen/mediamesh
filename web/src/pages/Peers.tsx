@@ -1,13 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { clsx } from 'clsx'
-import { Wifi, WifiOff } from 'lucide-react'
+import { Wifi, WifiOff, Copy, Check } from 'lucide-react'
 import { api, type Peer } from '../api/client'
 
 export default function Peers() {
   const qc = useQueryClient()
-  const [inviteToken, setInviteToken] = useState<string | null>(null)
-  const [redeemInput, setRedeemInput] = useState('')
+  const [invite, setInvite] = useState<{ url: string; token: string } | null>(null)
+  const [copied, setCopied] = useState<'url' | 'token' | null>(null)
+  const [redeemUrl, setRedeemUrl] = useState('')
+  const [redeemToken, setRedeemToken] = useState('')
   const [redeemError, setRedeemError] = useState<string | null>(null)
 
   const { data: peers = [], isLoading, error } = useQuery({
@@ -16,15 +18,19 @@ export default function Peers() {
   })
 
   const generateInvite = useMutation({
-    mutationFn: () => api.post<{ token: string }>('/api/peers/invite'),
-    onSuccess: (res) => setInviteToken(res.token),
+    mutationFn: () => api.post<{ url: string; token: string }>('/api/peers/invite'),
+    onSuccess: (res) => setInvite(res),
   })
 
   const redeemInvite = useMutation({
-    mutationFn: (token: string) => api.post<Peer>('/api/peers/accept', { token }),
+    mutationFn: () => api.post<Peer>('/api/peers/accept', {
+      token: redeemToken.trim(),
+      endpoint: redeemUrl.trim() || undefined,
+    }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['peers'] })
-      setRedeemInput('')
+      setRedeemUrl('')
+      setRedeemToken('')
       setRedeemError(null)
     },
     onError: (err: Error) => setRedeemError(err.message),
@@ -40,6 +46,12 @@ export default function Peers() {
     revoke.mutate(id)
   }
 
+  function copyField(field: 'url' | 'token', value: string) {
+    navigator.clipboard.writeText(value)
+    setCopied(field)
+    setTimeout(() => setCopied(null), 2000)
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -53,35 +65,77 @@ export default function Peers() {
         </button>
       </div>
 
-      <div className="bg-gray-50 border border-gray-200 rounded-md p-4 space-y-2">
-        <p className="text-sm font-medium text-gray-700">Redeem an invite token from another node:</p>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={redeemInput}
-            onChange={(e) => { setRedeemInput(e.target.value); setRedeemError(null) }}
-            placeholder="Paste invite token…"
-            className="flex-1 text-xs border rounded px-3 py-2 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <button
-            onClick={() => redeemInvite.mutate(redeemInput.trim())}
-            disabled={redeemInvite.isPending || !redeemInput.trim()}
-            className="px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700 disabled:opacity-50"
-          >
-            {redeemInvite.isPending ? 'Connecting…' : 'Connect'}
-          </button>
-        </div>
-        {redeemError && <p className="text-xs text-red-600">{redeemError}</p>}
-      </div>
-
-      {inviteToken && (
-        <div className="bg-blue-50 border border-blue-200 rounded-md p-4 text-sm space-y-1">
-          <p className="font-medium text-blue-800">Peer invite token (share with the other node):</p>
-          <code className="block text-xs break-all bg-white border rounded p-2 select-all">
-            {inviteToken}
-          </code>
+      {invite && (
+        <div className="bg-blue-50 border border-blue-200 rounded-md p-4 space-y-3 text-sm">
+          <p className="font-medium text-blue-800">Share both fields with the other node:</p>
+          <div className="space-y-2">
+            <div>
+              <label className="block text-xs text-blue-700 mb-1">Server URL</label>
+              <div className="flex gap-2">
+                <code className="flex-1 text-xs break-all bg-white border rounded px-2 py-1.5 select-all">
+                  {invite.url}
+                </code>
+                <button
+                  onClick={() => copyField('url', invite.url)}
+                  className="shrink-0 p-1.5 rounded border bg-white hover:bg-gray-50"
+                  title="Copy URL"
+                >
+                  {copied === 'url' ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5 text-gray-500" />}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-blue-700 mb-1">Invite Code</label>
+              <div className="flex gap-2">
+                <code className="flex-1 text-xs break-all bg-white border rounded px-2 py-1.5 select-all font-mono">
+                  {invite.token}
+                </code>
+                <button
+                  onClick={() => copyField('token', invite.token)}
+                  className="shrink-0 p-1.5 rounded border bg-white hover:bg-gray-50"
+                  title="Copy code"
+                >
+                  {copied === 'token' ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5 text-gray-500" />}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
+
+      <div className="bg-gray-50 border border-gray-200 rounded-md p-4 space-y-3">
+        <p className="text-sm font-medium text-gray-700">Connect to a peer using their invite:</p>
+        <div className="space-y-2">
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">Their Server URL</label>
+            <input
+              type="text"
+              value={redeemUrl}
+              onChange={(e) => { setRedeemUrl(e.target.value); setRedeemError(null) }}
+              placeholder="https://mediamesh.theirserver.com"
+              className="w-full text-sm border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">Invite Code</label>
+            <input
+              type="text"
+              value={redeemToken}
+              onChange={(e) => { setRedeemToken(e.target.value); setRedeemError(null) }}
+              placeholder="Paste invite code…"
+              className="w-full text-xs border rounded px-3 py-2 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+        <button
+          onClick={() => redeemInvite.mutate()}
+          disabled={redeemInvite.isPending || !redeemToken.trim()}
+          className="px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700 disabled:opacity-50"
+        >
+          {redeemInvite.isPending ? 'Connecting…' : 'Connect to Peer'}
+        </button>
+        {redeemError && <p className="text-xs text-red-600">{redeemError}</p>}
+      </div>
 
       {error && <p className="text-red-500">{(error as Error).message}</p>}
 

@@ -581,17 +581,18 @@ func (s *Server) handlePeerInvite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]string{"token": token})
+	writeJSON(w, map[string]string{"url": s.cfg.PublicURL, "token": token})
 }
 
 func (s *Server) handlePeerAccept(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Token string `json:"token" validate:"required"`
+		Token    string `json:"token"    validate:"required"`
+		Endpoint string `json:"endpoint"`
 	}
 	if !decodeAndValidate(w, r, &body, s.validate) {
 		return
 	}
-	peer, err := s.peers.AcceptInvite(r.Context(), body.Token)
+	peer, err := s.peers.AcceptInvite(r.Context(), body.Token, body.Endpoint)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
