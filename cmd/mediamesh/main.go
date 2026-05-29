@@ -92,6 +92,9 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// 8. Init peers manager.
 	peerMgr := peers.New(database, id, cfg, auditLog)
 
+	// 9. Start peer heartbeat.
+	peerMgr.StartHeartbeat(ctx)
+
 	// 9. Init webhook dispatcher.
 	dispatcher := webhooks.New(database, cfg.NodeName)
 

@@ -23,12 +23,14 @@ import (
 
 // Peer maps a peers table row.
 type Peer struct {
-	ID          string    `json:"id"`
-	DisplayName string    `json:"display_name"`
-	Endpoint    string    `json:"endpoint"`
-	PublicKey   []byte    `json:"public_key,omitempty"`
-	Status      string    `json:"status"`
-	AddedAt     time.Time `json:"added_at"`
+	ID          string     `json:"id"`
+	DisplayName string     `json:"display_name"`
+	Endpoint    string     `json:"endpoint"`
+	PublicKey   []byte     `json:"public_key,omitempty"`
+	Status      string     `json:"status"`
+	AddedAt     time.Time  `json:"added_at"`
+	LastSeen    *time.Time `json:"last_seen,omitempty"`
+	MissedPings int        `json:"-"`
 }
 
 // Manager manages peer relationships.
@@ -237,7 +239,7 @@ func (m *Manager) storePeer(ctx context.Context, p *Peer) error {
 // List returns all peers.
 func (m *Manager) List(ctx context.Context) ([]*Peer, error) {
 	rows, err := m.db.QueryContext(ctx,
-		`SELECT id, display_name, endpoint, public_key, status, added_at FROM peers`)
+		`SELECT id, display_name, endpoint, public_key, status, added_at, last_seen, missed_pings FROM peers`)
 	if err != nil {
 		return nil, fmt.Errorf("query peers: %w", err)
 	}
@@ -246,7 +248,7 @@ func (m *Manager) List(ctx context.Context) ([]*Peer, error) {
 	var peers []*Peer
 	for rows.Next() {
 		p := &Peer{}
-		if err := rows.Scan(&p.ID, &p.DisplayName, &p.Endpoint, &p.PublicKey, &p.Status, &p.AddedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.DisplayName, &p.Endpoint, &p.PublicKey, &p.Status, &p.AddedAt, &p.LastSeen, &p.MissedPings); err != nil {
 			return nil, err
 		}
 		peers = append(peers, p)
@@ -338,8 +340,8 @@ func (m *Manager) VerifyRequest(r *http.Request) (*Peer, error) {
 func (m *Manager) getByFingerprint(ctx context.Context, fp string) (*Peer, error) {
 	p := &Peer{}
 	err := m.db.QueryRowContext(ctx,
-		`SELECT id, display_name, endpoint, public_key, status, added_at FROM peers WHERE id = ?`, fp,
-	).Scan(&p.ID, &p.DisplayName, &p.Endpoint, &p.PublicKey, &p.Status, &p.AddedAt)
+		`SELECT id, display_name, endpoint, public_key, status, added_at, last_seen, missed_pings FROM peers WHERE id = ?`, fp,
+	).Scan(&p.ID, &p.DisplayName, &p.Endpoint, &p.PublicKey, &p.Status, &p.AddedAt, &p.LastSeen, &p.MissedPings)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("peer not found")
 	}
@@ -367,6 +369,107 @@ func (m *Manager) cleanJTIs() {
 		}
 		m.mu.Unlock()
 	}
+}
+
+// StartHeartbeat starts a background goroutine that pings all active/unreachable peers every 60 seconds.
+func (m *Manager) StartHeartbeat(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.pingAllPeers(ctx)
+			}
+		}
+	}()
+}
+
+// pingAllPeers pings all active and unreachable peers and updates their status.
+func (m *Manager) pingAllPeers(ctx context.Context) {
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT id, display_name, endpoint, public_key, status, added_at, last_seen, missed_pings
+		 FROM peers WHERE status IN ('active', 'unreachable')`)
+	if err != nil {
+		slog.Error("peers.pingAllPeers: query peers", "err", err)
+		return
+	}
+	defer rows.Close()
+
+	var peerList []*Peer
+	for rows.Next() {
+		p := &Peer{}
+		if err := rows.Scan(&p.ID, &p.DisplayName, &p.Endpoint, &p.PublicKey, &p.Status, &p.AddedAt, &p.LastSeen, &p.MissedPings); err != nil {
+			slog.Error("peers.pingAllPeers: scan peer", "err", err)
+			return
+		}
+		peerList = append(peerList, p)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("peers.pingAllPeers: rows error", "err", err)
+		return
+	}
+
+	for _, p := range peerList {
+		pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := m.pingPeer(pingCtx, p)
+		cancel()
+
+		now := time.Now().UTC()
+		if err == nil {
+			slog.Debug("peers.pingAllPeers: peer reachable", "peer_id", p.ID)
+			_, dbErr := m.db.ExecContext(ctx,
+				`UPDATE peers SET last_seen = ?, missed_pings = 0, status = 'active' WHERE id = ?`,
+				now, p.ID,
+			)
+			if dbErr != nil {
+				slog.Error("peers.pingAllPeers: update peer on success", "peer_id", p.ID, "err", dbErr)
+			}
+		} else {
+			newMissed := p.MissedPings + 1
+			newStatus := p.Status
+			if newMissed >= 3 {
+				newStatus = "unreachable"
+			}
+			if newStatus == "unreachable" && p.Status != "unreachable" {
+				slog.Info("peers.pingAllPeers: peer unreachable", "peer_id", p.ID, "endpoint", p.Endpoint)
+				_ = m.audit.Write(ctx, audit.Entry{
+					ActorType:  "system",
+					Action:     "peer.unreachable",
+					TargetType: "peer",
+					TargetID:   p.ID,
+				})
+			}
+			_, dbErr := m.db.ExecContext(ctx,
+				`UPDATE peers SET missed_pings = ?, status = ? WHERE id = ?`,
+				newMissed, newStatus, p.ID,
+			)
+			if dbErr != nil {
+				slog.Error("peers.pingAllPeers: update peer on failure", "peer_id", p.ID, "err", dbErr)
+			}
+		}
+	}
+}
+
+func (m *Manager) pingPeer(ctx context.Context, p *Peer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.Endpoint+"/api/peer/ping", nil)
+	if err != nil {
+		return fmt.Errorf("peers.pingPeer: create request: %w", err)
+	}
+	if err := m.SignRequest(req); err != nil {
+		return fmt.Errorf("peers.pingPeer: sign request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("peers.pingPeer: do request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("peers.pingPeer: unexpected status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // PeerMiddleware authenticates peer-to-peer requests.

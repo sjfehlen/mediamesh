@@ -105,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	// Peer-to-peer routes — peer JWT auth.
 	r.Group(func(r chi.Router) {
 		r.Use(s.peers.PeerMiddleware)
+		r.Get("/api/peer/ping", s.handlePeerPing)
 		r.Post("/api/peer/handshake", s.handlePeerHandshake)
 		r.Post("/api/peer/catalog", s.handlePeerCatalog)
 		r.Get("/api/peer/files/{itemID}", s.handlePeerFile)
@@ -520,6 +521,10 @@ func (s *Server) handlePeerRevoke(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Peer-to-peer handlers ---
+
+func (s *Server) handlePeerPing(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, map[string]any{"status": "ok", "version": 1})
+}
 
 func (s *Server) handlePeerHandshake(w http.ResponseWriter, r *http.Request) {
 	var body struct {
