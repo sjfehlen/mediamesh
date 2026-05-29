@@ -260,15 +260,15 @@ func (m *Manager) List(ctx context.Context) ([]*Peer, error) {
 	return peers, rows.Err()
 }
 
-// Revoke sets a peer's status to revoked.
+// Revoke removes a peer from the registry.
 func (m *Manager) Revoke(ctx context.Context, peerID string) error {
-	_, err := m.db.ExecContext(ctx, `UPDATE peers SET status = 'revoked' WHERE id = ?`, peerID)
+	_, err := m.db.ExecContext(ctx, `DELETE FROM peers WHERE id = ?`, peerID)
 	if err != nil {
 		return err
 	}
 	_ = m.audit.Write(ctx, audit.Entry{
 		ActorType:  "system",
-		Action:     "peer.revoked",
+		Action:     "peer.removed",
 		TargetType: "peer",
 		TargetID:   peerID,
 	})
