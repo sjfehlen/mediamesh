@@ -110,6 +110,7 @@ func (s *Server) Handler() http.Handler {
 		r.Use(s.peers.PeerMiddleware)
 		r.Get("/api/peer/ping", s.handlePeerPing)
 		r.Post("/api/peer/catalog", s.handlePeerCatalog)
+		r.Get("/api/peer/catalog", s.handlePeerCatalogGet)
 		r.Get("/api/peer/files/{itemID}", s.handlePeerFile)
 	})
 
@@ -161,6 +162,7 @@ func (s *Server) Handler() http.Handler {
 
 		r.Post("/api/peers/invite", s.handlePeerInvite)
 		r.Delete("/api/peers/{id}", s.handlePeerRevoke)
+		r.Post("/api/peers/{id}/sync", s.handlePeerSync)
 
 		r.Get("/api/users", s.handleUsersList)
 		r.Post("/api/users", s.handleUserCreate)
@@ -620,6 +622,15 @@ func (s *Server) handlePeerRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handlePeerSync(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.peers.SyncPeer(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- Peer-to-peer handlers ---
 
 func (s *Server) handlePeerPing(w http.ResponseWriter, _ *http.Request) {
@@ -659,6 +670,19 @@ func (s *Server) handlePeerHandshake(w http.ResponseWriter, r *http.Request) {
 		"endpoint":     s.cfg.PublicURL,
 		"public_key":   base64.StdEncoding.EncodeToString(s.identity.PublicKey),
 	})
+}
+
+func (s *Server) handlePeerCatalogGet(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.peers.VerifyRequest(r); err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	push, err := s.peers.BuildCatalogPush(r.Context())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, push)
 }
 
 func (s *Server) handlePeerCatalog(w http.ResponseWriter, r *http.Request) {

@@ -39,6 +39,44 @@ type CatalogPush struct {
 
 const fullSyncThreshold = 1000
 
+// BuildCatalogPush assembles a full CatalogPush of this node's local items.
+func (m *Manager) BuildCatalogPush(ctx context.Context) (*CatalogPush, error) {
+	version, err := catalog.CurrentVersion(ctx, m.db)
+	if err != nil {
+		return nil, err
+	}
+	items, err := m.fetchLocalItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &CatalogPush{SenderVersion: version, IsDelta: false, Items: items}, nil
+}
+
+// PullCatalog fetches the remote peer's catalog and ingests it locally.
+func (m *Manager) PullCatalog(ctx context.Context, peer *Peer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, peer.Endpoint+"/api/peer/catalog", nil)
+	if err != nil {
+		return err
+	}
+	if err := m.SignRequest(req); err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("peers.PullCatalog: get: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("peers.PullCatalog: status %d: %s", resp.StatusCode, b)
+	}
+	var push CatalogPush
+	if err := json.NewDecoder(resp.Body).Decode(&push); err != nil {
+		return fmt.Errorf("peers.PullCatalog: decode: %w", err)
+	}
+	return m.ReceiveCatalog(ctx, peer.ID, push)
+}
+
 // PushCatalog sends local catalog items to a peer, using delta sync when possible.
 // Only items with catalog_version > the peer's last checkpoint are sent.
 // Falls back to a full sync if the gap exceeds fullSyncThreshold.
@@ -181,6 +219,31 @@ func (m *Manager) ReceiveCatalog(ctx context.Context, peerID string, push Catalo
 	}
 
 	return nil
+}
+
+// SyncPeer triggers an immediate full catalog exchange with a single peer:
+// push our catalog to them and pull theirs back.
+func (m *Manager) SyncPeer(ctx context.Context, peerID string) error {
+	peers, err := m.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range peers {
+		if p.ID != peerID {
+			continue
+		}
+		if p.Status != "active" {
+			return fmt.Errorf("peer %s is not active", peerID)
+		}
+		if err := m.PushCatalog(ctx, p); err != nil {
+			return fmt.Errorf("push catalog: %w", err)
+		}
+		if err := m.PullCatalog(ctx, p); err != nil {
+			return fmt.Errorf("pull catalog: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("peer %s not found", peerID)
 }
 
 // SyncAll pushes catalog to all active peers.

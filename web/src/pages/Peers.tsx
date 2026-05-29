@@ -41,6 +41,10 @@ export default function Peers() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['peers'] }),
   })
 
+  const sync = useMutation({
+    mutationFn: (id: string) => api.post(`/api/peers/${id}/sync`),
+  })
+
   function handleRevoke(id: string) {
     if (!confirm('Remove this peer?')) return
     revoke.mutate(id)
@@ -168,13 +172,24 @@ export default function Peers() {
                 >
                   {p.status}
                 </span>
-                <button
-                  onClick={() => handleRevoke(p.id)}
-                  disabled={revoke.isPending}
-                  className="text-red-500 hover:underline disabled:opacity-50"
-                >
-                  Remove
-                </button>
+                <div className="flex gap-3">
+                  {p.status === 'active' && (
+                    <button
+                      onClick={() => sync.mutate(p.id)}
+                      disabled={sync.isPending}
+                      className="text-blue-500 hover:underline disabled:opacity-50"
+                    >
+                      {sync.isPending ? 'Syncing…' : 'Sync Now'}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleRevoke(p.id)}
+                    disabled={revoke.isPending}
+                    className="text-red-500 hover:underline disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
             </div>
           ))}
