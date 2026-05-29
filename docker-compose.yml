@@ -12,7 +12,7 @@ services:
       JELLYFIN_API_KEY: ""
       ABS_URL: "http://10.5.1.57:30067"
       ABS_API_KEY: ""
-      TMDB_API_KEY: ""
+      TMDB_API_KEY: "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIyMWMzMjAxOTFmMmU3NWI1NjI1ZjZmOGZlZmE3MjMyZCIsIm5iZiI6MTc4MDA3NDkzMy41MDcsInN1YiI6IjZhMTljOWI1NTVlMjY3NTg1YWUwOTA5YyIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.TJA6kOJhAdW5YiR59Vi08tpvu__0XTyRhDV56DUc4Yw"
     volumes:
       - /home/samuel/mediamesh-test/data:/data
       - /home/samuel/mediamesh-test/movies:/media/movies
