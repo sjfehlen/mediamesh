@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"github.com/sjfehlen/mediamesh/internal/catalog"
 	"github.com/sjfehlen/mediamesh/internal/config"
 	"github.com/sjfehlen/mediamesh/internal/identity"
+	"github.com/sjfehlen/mediamesh/internal/library"
 	"github.com/sjfehlen/mediamesh/internal/peers"
 	"github.com/sjfehlen/mediamesh/internal/requests"
 	"github.com/sjfehlen/mediamesh/internal/transfers"
@@ -146,6 +148,13 @@ func (s *Server) Handler() http.Handler {
 		r.Delete("/api/users/sessions/{id}", s.handleSessionRevoke)
 
 		r.Get("/api/audit", s.handleAuditList)
+
+		// Library configuration (admin manages, all users can read).
+		r.Get("/api/config/libraries", s.handleLibraryConfigList)
+		r.Post("/api/config/libraries", s.handleLibraryConfigCreate)
+		r.Patch("/api/config/libraries/{id}", s.handleLibraryConfigUpdate)
+		r.Delete("/api/config/libraries/{id}", s.handleLibraryConfigDelete)
+		r.Post("/api/config/libraries/{id}/scan", s.handleLibraryConfigScan)
 
 		// Webhook management.
 		r.Get("/api/webhooks", s.handleWebhookList)
@@ -623,6 +632,94 @@ func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, entries)
+}
+
+// --- Library config handlers ---
+
+func (s *Server) handleLibraryConfigList(w http.ResponseWriter, r *http.Request) {
+	libs, err := library.List(r.Context(), s.db)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, libs)
+}
+
+func (s *Server) handleLibraryConfigCreate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name      string `json:"name"       validate:"required"`
+		Path      string `json:"path"       validate:"required"`
+		MediaType string `json:"media_type" validate:"required,oneof=movie tv audiobook ebook"`
+	}
+	if !decodeAndValidate(w, r, &body, s.validate) {
+		return
+	}
+	lib, err := library.Create(r.Context(), s.db, body.Name, body.Path, body.MediaType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, lib)
+}
+
+func (s *Server) handleLibraryConfigUpdate(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Name      string `json:"name"`
+		Path      string `json:"path"`
+		MediaType string `json:"media_type" validate:"omitempty,oneof=movie tv audiobook ebook"`
+		Enabled   *bool  `json:"enabled"`
+	}
+	if !decodeAndValidate(w, r, &body, s.validate) {
+		return
+	}
+	if body.Enabled != nil {
+		if err := library.SetEnabled(r.Context(), s.db, id, *body.Enabled); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if body.Name != "" || body.Path != "" || body.MediaType != "" {
+		lib, err := library.Get(r.Context(), s.db, id)
+		if err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if body.Name != "" {
+			lib.Name = body.Name
+		}
+		if body.Path != "" {
+			lib.Path = body.Path
+		}
+		if body.MediaType != "" {
+			lib.MediaType = body.MediaType
+		}
+		if _, err := library.Update(r.Context(), s.db, id, lib.Name, lib.Path, lib.MediaType); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	lib, _ := library.Get(r.Context(), s.db, id)
+	writeJSON(w, lib)
+}
+
+func (s *Server) handleLibraryConfigDelete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := library.Delete(r.Context(), s.db, id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleLibraryConfigScan(w http.ResponseWriter, r *http.Request) {
+	go func() {
+		if err := s.scanner.ScanAll(context.Background()); err != nil {
+			slog.Error("manual scan", "err", err)
+		}
+	}()
+	writeJSON(w, map[string]string{"status": "scan started"})
 }
 
 // --- Bootstrap handler ---

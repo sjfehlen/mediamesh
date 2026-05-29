@@ -14,6 +14,7 @@ import (
 
 	"github.com/sjfehlen/mediamesh/internal/audit"
 	"github.com/sjfehlen/mediamesh/internal/config"
+	"github.com/sjfehlen/mediamesh/internal/library"
 )
 
 // MediaType describes the kind of media an item represents.
@@ -67,21 +68,40 @@ type mediaRoot struct {
 	mediaType MediaType
 }
 
-func (s *Scanner) mediaRoots() []mediaRoot {
-	return []mediaRoot{
-		{"/media/movies", Movie},
-		{"/media/tv", TVShow},
-		{"/media/audiobooks", Audiobook},
-		{"/media/kids-audiobooks", Audiobook},
-		{"/media/ebooks", Ebook},
-		{"/media/kids-ebooks", Ebook},
+// mediaRoots reads enabled libraries from the DB.
+func (s *Scanner) mediaRoots(ctx context.Context) []mediaRoot {
+	libs, err := library.ListEnabled(ctx, s.db)
+	if err != nil {
+		slog.Error("scanner: list libraries", "err", err)
+		return nil
+	}
+	roots := make([]mediaRoot, 0, len(libs))
+	for _, lib := range libs {
+		mt := mediaTypeFromString(lib.MediaType)
+		roots = append(roots, mediaRoot{path: lib.Path, mediaType: mt})
+	}
+	return roots
+}
+
+func mediaTypeFromString(s string) MediaType {
+	switch s {
+	case "movie":
+		return Movie
+	case "tv":
+		return TVShow
+	case "audiobook":
+		return Audiobook
+	case "ebook":
+		return Ebook
+	default:
+		return Movie
 	}
 }
 
 // ScanAll walks all media roots and upserts items.
 func (s *Scanner) ScanAll(ctx context.Context) error {
 	slog.Info("catalog scan starting")
-	roots := s.mediaRoots()
+	roots := s.mediaRoots(ctx)
 	var total int
 	for _, root := range roots {
 		n, err := s.scanRoot(ctx, root)

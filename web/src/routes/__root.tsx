@@ -1,21 +1,18 @@
-import { createRootRoute, Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
-import { useEffect } from 'react'
+import { createRootRoute, Link, Outlet, redirect, useNavigate } from '@tanstack/react-router'
 import { api, clearToken, getToken } from '../api/client'
 
 export const Route = createRootRoute({
+  beforeLoad: ({ location }) => {
+    if (location.pathname !== '/login' && !getToken()) {
+      throw redirect({ to: '/login' })
+    }
+  },
   component: RootLayout,
 })
 
 function RootLayout() {
   const navigate = useNavigate()
-  const { location } = useRouterState()
-  const isLoginPage = location.pathname === '/login'
-
-  useEffect(() => {
-    if (!isLoginPage && !getToken()) {
-      navigate({ to: '/login' })
-    }
-  }, [isLoginPage, navigate])
+  const isLoginPage = window.location.pathname === '/login'
 
   if (isLoginPage) {
     return <Outlet />
