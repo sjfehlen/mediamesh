@@ -405,13 +405,44 @@ func (s *Server) handleRequestsList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRequestSubmit(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
 	var body struct {
-		ItemID string `json:"item_id" validate:"required"`
-		Note   string `json:"note"`
+		ItemID       string  `json:"item_id"`
+		Note         string  `json:"note"`
+		RequestScope string  `json:"request_scope"`
+		SeriesName   *string `json:"series_name"`
+		ReqSeasonNum *int    `json:"req_season_num"`
 	}
-	if !decodeAndValidate(w, r, &body, s.validate) {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	req, err := s.requests.Submit(r.Context(), u.ID, body.ItemID, body.Note)
+	scope := body.RequestScope
+	if scope == "" {
+		scope = "item"
+	}
+	if scope != "item" && scope != "season" && scope != "series" {
+		http.Error(w, "request_scope must be item, season, or series", http.StatusBadRequest)
+		return
+	}
+	if scope == "item" && body.ItemID == "" {
+		http.Error(w, "item_id required for scope=item", http.StatusBadRequest)
+		return
+	}
+	if (scope == "season" || scope == "series") && (body.SeriesName == nil || *body.SeriesName == "") {
+		http.Error(w, "series_name required for scope=season or scope=series", http.StatusBadRequest)
+		return
+	}
+	if scope == "season" && body.ReqSeasonNum == nil {
+		http.Error(w, "req_season_num required for scope=season", http.StatusBadRequest)
+		return
+	}
+	req, err := s.requests.Submit(r.Context(), requests.SubmitParams{
+		UserID:       u.ID,
+		ItemID:       body.ItemID,
+		Note:         body.Note,
+		RequestScope: scope,
+		SeriesName:   body.SeriesName,
+		ReqSeasonNum: body.ReqSeasonNum,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -430,7 +461,73 @@ func (s *Server) handleRequestApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// For season/series scope, auto-enqueue one transfer per matching episode.
+	if req.RequestScope == "season" || req.RequestScope == "series" {
+		if err := s.enqueueEpisodeBatch(r.Context(), req); err != nil {
+			slog.Error("api.handleRequestApprove: enqueue batch", "request_id", req.ID, "err", err)
+			// Non-fatal: approval already recorded, log and continue.
+		}
+	}
+
 	writeJSON(w, req)
+}
+
+// enqueueEpisodeBatch finds all matching episodes in the catalog and enqueues a transfer for each.
+func (s *Server) enqueueEpisodeBatch(ctx context.Context, req *requests.Request) error {
+	if req.SeriesName == nil {
+		return fmt.Errorf("enqueueEpisodeBatch: series_name is nil")
+	}
+	series := *req.SeriesName
+
+	var rows *sql.Rows
+	var err error
+	switch req.RequestScope {
+	case "season":
+		if req.ReqSeasonNum == nil {
+			return fmt.Errorf("enqueueEpisodeBatch: req_season_num is nil for season scope")
+		}
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT id, peer_id FROM library_items
+			 WHERE series = ? AND season_num = ? AND media_type = 'tvepisode' AND peer_id IS NOT NULL`,
+			series, *req.ReqSeasonNum,
+		)
+	case "series":
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT id, peer_id FROM library_items
+			 WHERE series = ? AND media_type = 'tvepisode' AND peer_id IS NOT NULL`,
+			series,
+		)
+	default:
+		return fmt.Errorf("enqueueEpisodeBatch: unexpected scope %q", req.RequestScope)
+	}
+	if err != nil {
+		return fmt.Errorf("enqueueEpisodeBatch: query items: %w", err)
+	}
+	defer rows.Close()
+
+	type episodeRow struct {
+		itemID string
+		peerID string
+	}
+	var episodes []episodeRow
+	for rows.Next() {
+		var ep episodeRow
+		if err := rows.Scan(&ep.itemID, &ep.peerID); err != nil {
+			return fmt.Errorf("enqueueEpisodeBatch: scan: %w", err)
+		}
+		episodes = append(episodes, ep)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("enqueueEpisodeBatch: rows: %w", err)
+	}
+
+	for _, ep := range episodes {
+		if _, err := s.transfers.Enqueue(ctx, req.ID, ep.peerID, ep.itemID); err != nil {
+			slog.Error("api.enqueueEpisodeBatch: enqueue transfer", "item_id", ep.itemID, "err", err)
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleRequestReject(w http.ResponseWriter, r *http.Request) {

@@ -12,15 +12,28 @@ import (
 
 // Request maps a requests table row.
 type Request struct {
-	ID          string     `json:"id"`
-	UserID      string     `json:"user_id"`
-	ItemID      string     `json:"item_id"`
-	Status      string     `json:"status"`
-	Note        *string    `json:"note,omitempty"`
-	ReviewedBy  *string    `json:"reviewed_by,omitempty"`
-	ReviewNote  *string    `json:"review_note,omitempty"`
-	RequestedAt time.Time  `json:"requested_at"`
-	ReviewedAt  *time.Time `json:"reviewed_at,omitempty"`
+	ID           string     `json:"id"`
+	UserID       string     `json:"user_id"`
+	ItemID       string     `json:"item_id"`
+	Status       string     `json:"status"`
+	Note         *string    `json:"note,omitempty"`
+	ReviewedBy   *string    `json:"reviewed_by,omitempty"`
+	ReviewNote   *string    `json:"review_note,omitempty"`
+	RequestedAt  time.Time  `json:"requested_at"`
+	ReviewedAt   *time.Time `json:"reviewed_at,omitempty"`
+	RequestScope string     `json:"request_scope"`
+	SeriesName   *string    `json:"series_name,omitempty"`
+	ReqSeasonNum *int       `json:"req_season_num,omitempty"`
+}
+
+// SubmitParams holds parameters for Submit.
+type SubmitParams struct {
+	UserID       string
+	ItemID       string
+	Note         string
+	RequestScope string
+	SeriesName   *string
+	ReqSeasonNum *int
 }
 
 // EventDispatcher fires webhook events. Matches webhooks.EventDispatcher.
@@ -41,7 +54,15 @@ func NewStore(db *sql.DB, a *audit.Log, d EventDispatcher) *Store {
 }
 
 // Submit creates a new request.
-func (s *Store) Submit(ctx context.Context, userID, itemID, note string) (*Request, error) {
+func (s *Store) Submit(ctx context.Context, params SubmitParams) (*Request, error) {
+	userID := params.UserID
+	itemID := params.ItemID
+	note := params.Note
+	scope := params.RequestScope
+	if scope == "" {
+		scope = "item"
+	}
+
 	// Check user can_request.
 	var canRequest bool
 	var quotaGB *int64
@@ -71,14 +92,16 @@ func (s *Store) Submit(ctx context.Context, userID, itemID, note string) (*Reque
 		}
 	}
 
-	// Duplicate request check.
-	var dupCount int
-	_ = s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM requests WHERE user_id = ? AND item_id = ? AND status IN ('pending', 'approved')`,
-		userID, itemID,
-	).Scan(&dupCount)
-	if dupCount > 0 {
-		return nil, fmt.Errorf("duplicate request already in queue")
+	// Duplicate request check — only for item scope.
+	if scope == "item" {
+		var dupCount int
+		_ = s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM requests WHERE user_id = ? AND item_id = ? AND status IN ('pending', 'approved')`,
+			userID, itemID,
+		).Scan(&dupCount)
+		if dupCount > 0 {
+			return nil, fmt.Errorf("duplicate request already in queue")
+		}
 	}
 
 	id := uuid.New().String()
@@ -89,21 +112,29 @@ func (s *Store) Submit(ctx context.Context, userID, itemID, note string) (*Reque
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO requests (id, user_id, item_id, status, note, requested_at)
-		 VALUES (?, ?, ?, 'pending', ?, ?)`,
-		id, userID, itemID, notePtr, now,
+		`INSERT INTO requests (id, user_id, item_id, status, note, requested_at, request_scope, series_name, req_season_num)
+		 VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+		id, userID, itemID, notePtr, now, scope, params.SeriesName, params.ReqSeasonNum,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert request: %w", err)
 	}
 
+	detail := itemID
+	if scope != "item" && params.SeriesName != nil {
+		if params.ReqSeasonNum != nil {
+			detail = fmt.Sprintf("series:%s:season:%d", *params.SeriesName, *params.ReqSeasonNum)
+		} else {
+			detail = fmt.Sprintf("series:%s", *params.SeriesName)
+		}
+	}
 	_ = s.audit.Write(ctx, audit.Entry{
 		ActorID:    userID,
 		ActorType:  "user",
 		Action:     "request.submit",
 		TargetType: "request",
 		TargetID:   id,
-		Detail:     itemID,
+		Detail:     detail,
 	})
 
 	req, err := s.get(ctx, id)
@@ -163,7 +194,8 @@ func (s *Store) Reject(ctx context.Context, requestID, reviewerID, note string) 
 
 // List returns requests. Admin sees all; user sees their own.
 func (s *Store) List(ctx context.Context, userID string, adminView bool) ([]*Request, error) {
-	query := `SELECT id, user_id, item_id, status, note, reviewed_by, review_note, requested_at, reviewed_at
+	query := `SELECT id, user_id, item_id, status, note, reviewed_by, review_note, requested_at, reviewed_at,
+	          request_scope, series_name, req_season_num
 	          FROM requests`
 	args := []interface{}{}
 	if !adminView {
@@ -182,7 +214,8 @@ func (s *Store) List(ctx context.Context, userID string, adminView bool) ([]*Req
 	for rows.Next() {
 		r := &Request{}
 		if err := rows.Scan(&r.ID, &r.UserID, &r.ItemID, &r.Status, &r.Note,
-			&r.ReviewedBy, &r.ReviewNote, &r.RequestedAt, &r.ReviewedAt); err != nil {
+			&r.ReviewedBy, &r.ReviewNote, &r.RequestedAt, &r.ReviewedAt,
+			&r.RequestScope, &r.SeriesName, &r.ReqSeasonNum); err != nil {
 			return nil, fmt.Errorf("scan request: %w", err)
 		}
 		reqs = append(reqs, r)
@@ -223,10 +256,12 @@ func (s *Store) Cancel(ctx context.Context, id, userID string, isAdmin bool) err
 func (s *Store) get(ctx context.Context, id string) (*Request, error) {
 	r := &Request{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, user_id, item_id, status, note, reviewed_by, review_note, requested_at, reviewed_at
+		`SELECT id, user_id, item_id, status, note, reviewed_by, review_note, requested_at, reviewed_at,
+		        request_scope, series_name, req_season_num
 		 FROM requests WHERE id = ?`, id,
 	).Scan(&r.ID, &r.UserID, &r.ItemID, &r.Status, &r.Note,
-		&r.ReviewedBy, &r.ReviewNote, &r.RequestedAt, &r.ReviewedAt)
+		&r.ReviewedBy, &r.ReviewNote, &r.RequestedAt, &r.ReviewedAt,
+		&r.RequestScope, &r.SeriesName, &r.ReqSeasonNum)
 	if err != nil {
 		return nil, fmt.Errorf("get request: %w", err)
 	}
