@@ -109,6 +109,16 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, map[string]string{"version": AppVersion})
 	})
 
+	r.Delete("/api/debug/items/local", func(w http.ResponseWriter, r *http.Request) {
+		res, err := s.db.ExecContext(r.Context(), `DELETE FROM library_items WHERE peer_id IS NULL`)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		n, _ := res.RowsAffected()
+		writeJSON(w, map[string]int64{"deleted": n})
+	})
+
 	r.Get("/api/debug/items", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := s.db.QueryContext(r.Context(),
 			`SELECT COALESCE(peer_id,'LOCAL') as peer, COALESCE(library_id,'NULL') as lib,

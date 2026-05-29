@@ -43,7 +43,11 @@ export default function Settings() {
 
   const deleteLib = useMutation({
     mutationFn: (id: string) => api.delete(`/api/config/libraries/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['config-libraries'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['config-libraries'] })
+      qc.invalidateQueries({ queryKey: ['library'] })
+      qc.invalidateQueries({ queryKey: ['tv-series'] })
+    },
   })
 
   const scanNow = useMutation({
