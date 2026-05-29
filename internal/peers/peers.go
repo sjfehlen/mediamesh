@@ -230,7 +230,7 @@ func (m *Manager) storePeer(ctx context.Context, p *Peer) error {
 	_, err := m.db.ExecContext(ctx,
 		`INSERT INTO peers (id, display_name, endpoint, public_key, status, added_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, endpoint=excluded.endpoint, status=excluded.status`,
+		 ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, endpoint=excluded.endpoint, status=excluded.status, missed_pings=0`,
 		p.ID, p.DisplayName, p.Endpoint, p.PublicKey, p.Status, time.Now().UTC(),
 	)
 	return err
@@ -403,7 +403,7 @@ func (m *Manager) pingAllPeers(ctx context.Context) {
 		p := &Peer{}
 		if err := rows.Scan(&p.ID, &p.DisplayName, &p.Endpoint, &p.PublicKey, &p.Status, &p.AddedAt, &p.LastSeen, &p.MissedPings); err != nil {
 			slog.Error("peers.pingAllPeers: scan peer", "err", err)
-			return
+			continue
 		}
 		peerList = append(peerList, p)
 	}
@@ -429,6 +429,9 @@ func (m *Manager) pingAllPeers(ctx context.Context) {
 			}
 		} else {
 			newMissed := p.MissedPings + 1
+			if newMissed > 3 {
+				newMissed = 3
+			}
 			newStatus := p.Status
 			if newMissed >= 3 {
 				newStatus = "unreachable"
