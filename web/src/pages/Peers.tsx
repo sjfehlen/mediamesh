@@ -42,7 +42,7 @@ export default function Peers() {
   })
 
   function handleRevoke(id: string) {
-    if (!confirm('Revoke this peer?')) return
+    if (!confirm('Remove this peer?')) return
     revoke.mutate(id)
   }
 
@@ -168,15 +168,13 @@ export default function Peers() {
                 >
                   {p.status}
                 </span>
-                {p.status === 'active' && (
-                  <button
-                    onClick={() => handleRevoke(p.id)}
-                    disabled={revoke.isPending}
-                    className="text-red-500 hover:underline disabled:opacity-50"
-                  >
-                    Revoke
-                  </button>
-                )}
+                <button
+                  onClick={() => handleRevoke(p.id)}
+                  disabled={revoke.isPending}
+                  className="text-red-500 hover:underline disabled:opacity-50"
+                >
+                  Remove
+                </button>
               </div>
             </div>
           ))}
