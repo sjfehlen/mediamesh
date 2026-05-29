@@ -148,9 +148,10 @@ func Delete(ctx context.Context, db *sql.DB, id string) error {
 	if err != nil {
 		return err
 	}
-	// Remove catalog items that came from this library's root path.
+	// Explicitly delete legacy items (library_id IS NULL) matched by root_path.
+	// Items with library_id set are removed automatically via ON DELETE CASCADE.
 	if _, err := db.ExecContext(ctx,
-		`DELETE FROM library_items WHERE peer_id IS NULL AND root_path = ?`,
+		`DELETE FROM library_items WHERE peer_id IS NULL AND library_id IS NULL AND root_path = ?`,
 		lib.Path,
 	); err != nil {
 		return fmt.Errorf("library.Delete items: %w", err)

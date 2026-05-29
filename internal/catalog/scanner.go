@@ -45,6 +45,7 @@ type Item struct {
 	RelativePath string     `json:"relative_path"`
 	FileSize     *int64     `json:"file_size,omitempty"`
 	TrackCount   *int       `json:"track_count,omitempty"`
+	LibraryID    string     `json:"-"`
 	MetaTitle    *string    `json:"meta_title,omitempty"`
 	TmdbID       *int64     `json:"tmdb_id,omitempty"`
 	OlKey        *string    `json:"ol_key,omitempty"`
@@ -117,6 +118,7 @@ func NewScanner(db *sql.DB, cfg *config.Config, a *audit.Log) *Scanner {
 }
 
 type mediaRoot struct {
+	libraryID string
 	path      string
 	mediaType MediaType
 }
@@ -131,7 +133,7 @@ func (s *Scanner) mediaRoots(ctx context.Context) []mediaRoot {
 	roots := make([]mediaRoot, 0, len(libs))
 	for _, lib := range libs {
 		mt := mediaTypeFromString(lib.MediaType)
-		roots = append(roots, mediaRoot{path: lib.Path, mediaType: mt})
+		roots = append(roots, mediaRoot{libraryID: lib.ID, path: lib.Path, mediaType: mt})
 	}
 	return roots
 }
@@ -180,14 +182,14 @@ func (s *Scanner) scanRoot(ctx context.Context, root mediaRoot) (int, error) {
 		err   error
 	)
 	if root.mediaType == Audiobook {
-		count, seen, err = s.scanAudiobookRoot(ctx, root.path)
+		count, seen, err = s.scanAudiobookRoot(ctx, root)
 	} else {
 		count, seen, err = s.scanFileRoot(ctx, root)
 	}
 	if err != nil {
 		return count, err
 	}
-	pruned, pruneErr := s.pruneRoot(ctx, root.path, seen)
+	pruned, pruneErr := s.pruneRoot(ctx, root.libraryID, root.path, seen)
 	if pruneErr != nil {
 		slog.Error("prune root failed", "root", root.path, "err", pruneErr)
 	} else if pruned > 0 {
@@ -247,6 +249,7 @@ func (s *Scanner) scanFileRoot(ctx context.Context, root mediaRoot) (int, map[st
 
 		item := &Item{
 			ID:           itemID("local:" + rel),
+			LibraryID:    root.libraryID,
 			MediaType:    mt,
 			RootPath:     root.path,
 			RelativePath: rel,
@@ -288,8 +291,8 @@ func (s *Scanner) scanFileRoot(ctx context.Context, root mediaRoot) (int, map[st
 // scanAudiobookRoot treats each immediate subfolder as one audiobook.
 // It expects a flat layout: one subfolder per book directly under the root.
 // Two-level author/book layouts are not supported — each top-level folder is treated as one book.
-func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, map[string]struct{}, error) {
-	entries, err := fs.ReadDir(newFS(rootPath), ".")
+func (s *Scanner) scanAudiobookRoot(ctx context.Context, root mediaRoot) (int, map[string]struct{}, error) {
+	entries, err := fs.ReadDir(newFS(root.path), ".")
 	if err != nil {
 		return 0, nil, fmt.Errorf("catalog.scanAudiobookRoot: %w", err)
 	}
@@ -304,7 +307,7 @@ func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, 
 			continue
 		}
 
-		bookDir := filepath.Join(rootPath, entry.Name())
+		bookDir := filepath.Join(root.path, entry.Name())
 		totalSize, trackCount, latestMtime := audiobookDirStats(bookDir)
 
 		rel := entry.Name()
@@ -317,8 +320,9 @@ func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, 
 
 		item := &Item{
 			ID:           itemID(key),
+			LibraryID:    root.libraryID,
 			MediaType:    Audiobook,
-			RootPath:     rootPath,
+			RootPath:     root.path,
 			Title:        entry.Name(),
 			RelativePath: rel,
 			FileSize:     &totalSize,
@@ -373,10 +377,11 @@ func (r realFS) Open(name string) (fs.File, error) {
 
 // pruneRoot deletes local catalog entries whose relative_path is no longer present on disk
 // for the given root. seen is the set of relative paths collected during the scan pass.
-func (s *Scanner) pruneRoot(ctx context.Context, rootPath string, seen map[string]struct{}) (int, error) {
+func (s *Scanner) pruneRoot(ctx context.Context, libraryID, rootPath string, seen map[string]struct{}) (int, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, relative_path FROM library_items WHERE peer_id IS NULL AND root_path = ?`,
-		rootPath,
+		`SELECT id, relative_path FROM library_items
+		 WHERE peer_id IS NULL AND (library_id = ? OR root_path = ?)`,
+		libraryID, rootPath,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("catalog.pruneRoot: query: %w", err)
@@ -465,10 +470,10 @@ func (s *Scanner) upsertItem(ctx context.Context, item *Item) error {
 	cv, _ := BumpVersion(ctx, s.db)
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO library_items
-		  (id, peer_id, media_type, title, year, series, season_num, episode_num,
+		  (id, library_id, peer_id, media_type, title, year, series, season_num, episode_num,
 		   root_path, relative_path, file_size, track_count, file_mtime, last_seen, catalog_version)
-		 VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		item.ID, string(item.MediaType), item.Title, item.Year,
+		 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.ID, item.LibraryID, string(item.MediaType), item.Title, item.Year,
 		item.Series, item.SeasonNum, item.EpisodeNum,
 		item.RootPath, item.RelativePath, item.FileSize, item.TrackCount, item.FileMtime, now, cv,
 	)
