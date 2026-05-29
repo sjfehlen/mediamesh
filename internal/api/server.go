@@ -132,6 +132,7 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/api/library/tv/{series}/{season_num}", s.handleTVEpisodes)
 
 		r.Get("/api/library/{id}", s.handleLibraryItem)
+		r.Patch("/api/library/{id}", s.handleLibraryItemPatch)
 
 		// Requests.
 		r.Get("/api/requests", s.handleRequestsList)
@@ -338,6 +339,39 @@ func (s *Server) handleLibraryList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLibraryItem(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	item, err := catalog.GetByID(r.Context(), s.db, id)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, item)
+}
+
+func (s *Server) handleLibraryItemPatch(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		MetaTitle   *string  `json:"meta_title"`
+		Description *string  `json:"description"`
+		PosterURL   *string  `json:"poster_url"`
+		Rating      *float64 `json:"rating"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	_, err := s.db.ExecContext(r.Context(),
+		`UPDATE library_items SET
+			meta_title  = COALESCE(?, meta_title),
+			description = COALESCE(?, description),
+			poster_url  = COALESCE(?, poster_url),
+			rating      = COALESCE(?, rating)
+		 WHERE id = ?`,
+		body.MetaTitle, body.Description, body.PosterURL, body.Rating, id,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	item, err := catalog.GetByID(r.Context(), s.db, id)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)

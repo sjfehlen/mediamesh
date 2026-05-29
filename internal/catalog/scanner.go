@@ -45,6 +45,7 @@ type Item struct {
 	RelativePath string     `json:"relative_path"`
 	FileSize     *int64     `json:"file_size,omitempty"`
 	TrackCount   *int       `json:"track_count,omitempty"`
+	MetaTitle    *string    `json:"meta_title,omitempty"`
 	TmdbID       *int64     `json:"tmdb_id,omitempty"`
 	OlKey        *string    `json:"ol_key,omitempty"`
 	PosterURL    *string    `json:"poster_url,omitempty"`
@@ -503,12 +504,12 @@ func (s *Scanner) StartScheduled(ctx context.Context, interval time.Duration) {
 }
 
 // GetAll returns all library items.
+const itemSelectCols = `id, peer_id, media_type, title, meta_title, year, series, season_num, episode_num,
+	        relative_path, file_size, track_count, tmdb_id, ol_key, poster_url, description,
+	        rating, genres, last_seen, file_mtime, metadata_at`
+
 func GetAll(ctx context.Context, db *sql.DB) ([]*Item, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT id, peer_id, media_type, title, year, series, season_num, episode_num,
-		        relative_path, file_size, track_count, tmdb_id, ol_key, poster_url, description,
-		        rating, genres, last_seen, file_mtime, metadata_at
-		 FROM library_items`)
+	rows, err := db.QueryContext(ctx, `SELECT `+itemSelectCols+` FROM library_items`)
 	if err != nil {
 		return nil, fmt.Errorf("catalog.GetAll: %w", err)
 	}
@@ -518,11 +519,7 @@ func GetAll(ctx context.Context, db *sql.DB) ([]*Item, error) {
 
 // GetByID returns a single library item.
 func GetByID(ctx context.Context, db *sql.DB, id string) (*Item, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT id, peer_id, media_type, title, year, series, season_num, episode_num,
-		        relative_path, file_size, track_count, tmdb_id, ol_key, poster_url, description,
-		        rating, genres, last_seen, file_mtime, metadata_at
-		 FROM library_items WHERE id = ?`, id)
+	rows, err := db.QueryContext(ctx, `SELECT `+itemSelectCols+` FROM library_items WHERE id = ?`, id)
 	if err != nil {
 		return nil, fmt.Errorf("catalog.GetByID: %w", err)
 	}
@@ -541,11 +538,7 @@ func GetByID(ctx context.Context, db *sql.DB, id string) (*Item, error) {
 func GetStaleMetadata(ctx context.Context, db *sql.DB) ([]*Item, error) {
 	cutoff := time.Now().UTC().Add(-7 * 24 * time.Hour)
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, peer_id, media_type, title, year, series, season_num, episode_num,
-		        relative_path, file_size, track_count, tmdb_id, ol_key, poster_url, description,
-		        rating, genres, last_seen, file_mtime, metadata_at
-		 FROM library_items
-		 WHERE metadata_at IS NULL OR metadata_at < ?`, cutoff)
+		`SELECT `+itemSelectCols+` FROM library_items WHERE metadata_at IS NULL OR metadata_at < ?`, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("catalog.GetStaleMetadata: %w", err)
 	}
@@ -558,7 +551,7 @@ func scanItems(rows *sql.Rows) ([]*Item, error) {
 	for rows.Next() {
 		item := &Item{}
 		if err := rows.Scan(
-			&item.ID, &item.PeerID, &item.MediaType, &item.Title, &item.Year,
+			&item.ID, &item.PeerID, &item.MediaType, &item.Title, &item.MetaTitle, &item.Year,
 			&item.Series, &item.SeasonNum, &item.EpisodeNum,
 			&item.RelativePath, &item.FileSize, &item.TrackCount,
 			&item.TmdbID, &item.OlKey,

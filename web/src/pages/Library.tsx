@@ -37,7 +37,7 @@ function MediaCard({ item, onClick }: { item: LibraryItem; onClick: () => void }
           {item.year && <span>· {item.year}</span>}
           {item.peer_id && <span className="ml-auto text-blue-500">Remote</span>}
         </div>
-        <p className="font-medium text-sm leading-tight line-clamp-2">{item.title}</p>
+        <p className="font-medium text-sm leading-tight line-clamp-2">{item.meta_title ?? item.title}</p>
         {item.rating !== undefined && (
           <p className="text-xs text-gray-500">⭐ {item.rating.toFixed(1)}</p>
         )}

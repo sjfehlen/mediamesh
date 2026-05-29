@@ -102,11 +102,12 @@ func (f *Fetcher) enrichTMDB(ctx context.Context, db *sql.DB, item *catalog.Item
 	}
 
 	var (
-		tmdbID     int64
-		posterURL  string
-		overview   string
-		rating     float64
-		genresStr  string
+		tmdbID    int64
+		metaTitle string
+		posterURL string
+		overview  string
+		rating    float64
+		genresStr string
 	)
 
 	urlOptions := make(map[string]string)
@@ -125,6 +126,7 @@ func (f *Fetcher) enrichTMDB(ctx context.Context, db *sql.DB, item *catalog.Item
 		}
 		first := result.Results[0]
 		tmdbID = int64(first.ID)
+		metaTitle = first.Name
 		if first.PosterPath != "" {
 			posterURL = "https://image.tmdb.org/t/p/w500" + first.PosterPath
 		}
@@ -147,6 +149,7 @@ func (f *Fetcher) enrichTMDB(ctx context.Context, db *sql.DB, item *catalog.Item
 		}
 		first := result.Results[0]
 		tmdbID = int64(first.ID)
+		metaTitle = first.Title
 		if first.PosterPath != "" {
 			posterURL = "https://image.tmdb.org/t/p/w500" + first.PosterPath
 		}
@@ -162,8 +165,8 @@ func (f *Fetcher) enrichTMDB(ctx context.Context, db *sql.DB, item *catalog.Item
 
 	now := time.Now().UTC()
 	_, err := db.ExecContext(ctx,
-		`UPDATE library_items SET tmdb_id = ?, poster_url = ?, description = ?, rating = ?, genres = ?, metadata_at = ? WHERE id = ?`,
-		tmdbID, posterURL, overview, rating, genresStr, now, item.ID,
+		`UPDATE library_items SET tmdb_id = ?, meta_title = ?, poster_url = ?, description = ?, rating = ?, genres = ?, metadata_at = ? WHERE id = ?`,
+		tmdbID, metaTitle, posterURL, overview, rating, genresStr, now, item.ID,
 	)
 	return err
 }
@@ -213,8 +216,8 @@ func (f *Fetcher) enrichOpenLibrary(ctx context.Context, db *sql.DB, item *catal
 
 	now := time.Now().UTC()
 	_, err = db.ExecContext(ctx,
-		`UPDATE library_items SET ol_key = ?, poster_url = ?, description = ?, metadata_at = ? WHERE id = ?`,
-		first.Key, posterURL, first.FirstSentence, now, item.ID,
+		`UPDATE library_items SET ol_key = ?, meta_title = ?, poster_url = ?, description = ?, metadata_at = ? WHERE id = ?`,
+		first.Key, first.Title, posterURL, first.FirstSentence, now, item.ID,
 	)
 	return err
 }

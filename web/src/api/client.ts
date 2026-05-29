@@ -71,6 +71,7 @@ export interface LibraryItem {
   peer_id?: string
   media_type: string
   title: string
+  meta_title?: string
   year?: number
   series?: string
   season_num?: number
@@ -141,6 +142,8 @@ export interface AuditEntry {
 }
 
 export const getItem = (id: string) => api.get<LibraryItem>(`/api/library/${id}`)
+export const patchItem = (id: string, patch: Partial<Pick<LibraryItem, 'meta_title' | 'description' | 'poster_url' | 'rating'>>) =>
+  api.patch<LibraryItem>(`/api/library/${id}`, patch)
 
 export const getPeers = () => api.get<Peer[]>('/api/peers')
 
