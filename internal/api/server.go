@@ -109,6 +109,31 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, map[string]string{"version": AppVersion})
 	})
 
+	r.Get("/api/debug/items", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := s.db.QueryContext(r.Context(),
+			`SELECT COALESCE(peer_id,'LOCAL') as peer, COALESCE(library_id,'NULL') as lib,
+			        root_path, COUNT(*) as cnt
+			 FROM library_items GROUP BY peer_id, library_id, root_path ORDER BY peer, lib`)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+		type row struct {
+			Peer      string `json:"peer"`
+			LibraryID string `json:"library_id"`
+			RootPath  string `json:"root_path"`
+			Count     int    `json:"count"`
+		}
+		var result []row
+		for rows.Next() {
+			var r row
+			_ = rows.Scan(&r.Peer, &r.LibraryID, &r.RootPath, &r.Count)
+			result = append(result, r)
+		}
+		writeJSON(w, result)
+	})
+
 	// Handshake is unauthenticated — the invite token is the proof of identity.
 	r.Post("/api/peer/handshake", s.handlePeerHandshake)
 
