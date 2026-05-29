@@ -84,6 +84,15 @@ export interface LibraryItem {
   genres?: string
 }
 
+export interface TVSeriesSummary {
+  series: string
+  season_count: number
+  episode_count: number
+  poster_url?: string
+  description?: string
+  rating?: number
+}
+
 export interface Request {
   id: string
   user_id: string
@@ -142,6 +151,7 @@ export interface AuditEntry {
 }
 
 export const getItem = (id: string) => api.get<LibraryItem>(`/api/library/${id}`)
+export const getTVSeries = () => api.get<TVSeriesSummary[]>('/api/library/tv')
 export const patchItem = (id: string, patch: Partial<Pick<LibraryItem, 'meta_title' | 'description' | 'poster_url' | 'rating'>>) =>
   api.patch<LibraryItem>(`/api/library/${id}`, patch)
 

@@ -1,14 +1,12 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Search, Film, Book, Headphones, Tv } from 'lucide-react'
-import { api, type LibraryItem } from '../api/client'
+import { api, getTVSeries, type LibraryItem, type TVSeriesSummary } from '../api/client'
 import ItemDetailPanel from '../components/ItemDetailPanel'
 
 const mediaTypeIcons: Record<string, React.ReactNode> = {
   movie: <Film className="w-4 h-4" />,
   tvshow: <Tv className="w-4 h-4" />,
-  tvepisode: <Tv className="w-4 h-4" />,
-  tvseason: <Tv className="w-4 h-4" />,
   audiobook: <Headphones className="w-4 h-4" />,
   ebook: <Book className="w-4 h-4" />,
 }
@@ -20,11 +18,7 @@ function MediaCard({ item, onClick }: { item: LibraryItem; onClick: () => void }
       onClick={onClick}
     >
       {item.poster_url ? (
-        <img
-          src={item.poster_url}
-          alt={item.title}
-          className="w-full h-48 object-cover"
-        />
+        <img src={item.poster_url} alt={item.meta_title ?? item.title} className="w-full h-48 object-cover" />
       ) : (
         <div className="w-full h-48 bg-gray-200 flex items-center justify-center">
           <span className="text-gray-400 text-4xl">?</span>
@@ -46,12 +40,39 @@ function MediaCard({ item, onClick }: { item: LibraryItem; onClick: () => void }
   )
 }
 
+function TVSeriesCard({ series }: { series: TVSeriesSummary }) {
+  return (
+    <div className="bg-white rounded-lg shadow overflow-hidden flex flex-col">
+      {series.poster_url ? (
+        <img src={series.poster_url} alt={series.series} className="w-full h-48 object-cover" />
+      ) : (
+        <div className="w-full h-48 bg-gray-200 flex items-center justify-center">
+          <Tv className="w-10 h-10 text-gray-400" />
+        </div>
+      )}
+      <div className="p-3 flex-1 flex flex-col gap-1">
+        <div className="flex items-center gap-1 text-xs text-gray-500">
+          <Tv className="w-4 h-4" />
+          <span>{series.season_count} season{series.season_count !== 1 ? 's' : ''}</span>
+          <span>· {series.episode_count} ep{series.episode_count !== 1 ? 's' : ''}</span>
+        </div>
+        <p className="font-medium text-sm leading-tight line-clamp-2">{series.series}</p>
+        {series.rating != null && (
+          <p className="text-xs text-gray-500">⭐ {series.rating.toFixed(1)}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Library() {
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
 
-  const { data: items = [], isLoading, error } = useQuery({
+  const isTVView = typeFilter === 'tvshow'
+
+  const { data: items = [], isLoading: itemsLoading, error: itemsError } = useQuery({
     queryKey: ['library', search, typeFilter],
     queryFn: () => {
       const params = new URLSearchParams()
@@ -59,13 +80,26 @@ export default function Library() {
       if (typeFilter) params.set('type', typeFilter)
       return api.get<LibraryItem[]>(`/api/library?${params}`)
     },
+    enabled: !isTVView,
   })
+
+  const { data: tvSeries = [], isLoading: tvLoading, error: tvError } = useQuery({
+    queryKey: ['tv-series'],
+    queryFn: getTVSeries,
+    enabled: isTVView,
+  })
+
+  const isLoading = isTVView ? tvLoading : itemsLoading
+  const error = isTVView ? tvError : itemsError
+
+  const filteredTV = isTVView && search
+    ? tvSeries.filter((s) => s.series.toLowerCase().includes(search.toLowerCase()))
+    : tvSeries
 
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-2xl font-bold">Library</h1>
 
-      {/* Filter bar */}
       <div className="flex gap-3 flex-wrap">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -94,24 +128,27 @@ export default function Library() {
 
       {isLoading ? (
         <p className="text-gray-500">Loading…</p>
+      ) : isTVView ? (
+        filteredTV.length === 0 ? (
+          <p className="text-gray-500">No TV shows found.</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            {filteredTV.map((s) => (
+              <TVSeriesCard key={s.series} series={s} />
+            ))}
+          </div>
+        )
       ) : items.length === 0 ? (
         <p className="text-gray-500">No items found.</p>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
           {items.map((item) => (
-            <MediaCard
-              key={item.id}
-              item={item}
-              onClick={() => setSelectedItemId(item.id)}
-            />
+            <MediaCard key={item.id} item={item} onClick={() => setSelectedItemId(item.id)} />
           ))}
         </div>
       )}
 
-      <ItemDetailPanel
-        itemId={selectedItemId}
-        onClose={() => setSelectedItemId(null)}
-      />
+      <ItemDetailPanel itemId={selectedItemId} onClose={() => setSelectedItemId(null)} />
     </div>
   )
 }

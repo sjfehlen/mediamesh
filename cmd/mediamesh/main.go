@@ -80,7 +80,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	scanner.StartScheduled(ctx, time.Hour)
 
 	// 7. Init metadata fetcher, start scheduled enrich (12 hour interval).
-	metaFetcher := metadata.New(cfg.TMDBAPIKey)
+	metaFetcher := metadata.New(cfg)
 	metaFetcher.StartScheduled(ctx, database, 12*time.Hour)
 
 	// 8. Init peers manager.

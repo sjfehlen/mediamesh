@@ -321,6 +321,10 @@ func (s *Server) handleLibraryList(w http.ResponseWriter, r *http.Request) {
 
 	var filtered []*catalog.Item
 	for _, item := range items {
+		// TV episodes and seasons are served via /api/library/tv hierarchy, not the flat list.
+		if item.MediaType == catalog.TVEpisode || item.MediaType == catalog.TVSeason {
+			continue
+		}
 		if mediaType != "" && string(item.MediaType) != mediaType {
 			continue
 		}
