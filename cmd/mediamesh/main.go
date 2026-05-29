@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"embed"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sjfehlen/mediamesh/internal/api"
+	"github.com/sjfehlen/mediamesh/migrations"
 	"github.com/sjfehlen/mediamesh/internal/audit"
 	"github.com/sjfehlen/mediamesh/internal/auth"
 	"github.com/sjfehlen/mediamesh/internal/catalog"
@@ -27,9 +26,6 @@ import (
 	"github.com/sjfehlen/mediamesh/internal/users"
 	"github.com/sjfehlen/mediamesh/internal/webhooks"
 )
-
-//go:embed ../../migrations
-var migrationsDir embed.FS
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -57,12 +53,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// database is *sql.DB (used by sqlc-generated code and most packages).
 	// _ is *sqlx.DB (available for ad-hoc queries; not wired here yet but
 	//   packages may accept it when convenient).
-	migrationsFS, err := fs.Sub(migrationsDir, "migrations")
-	if err != nil {
-		slog.Error("failed to get migrations FS", "err", err)
-		os.Exit(1)
-	}
-	database, _, err := db.Open(cfg.DataDir, migrationsFS)
+	database, _, err := db.Open(cfg.DataDir, migrations.FS)
 	if err != nil {
 		return err
 	}
