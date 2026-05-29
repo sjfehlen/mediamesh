@@ -512,6 +512,50 @@ func (e *Engine) Resume(ctx context.Context, id string) error {
 	return nil
 }
 
+// Retry resets a failed transfer back to queued.
+func (e *Engine) Retry(ctx context.Context, id string) error {
+	res, err := e.db.ExecContext(ctx,
+		`UPDATE transfers SET status = 'queued', error = NULL WHERE id = ? AND status = 'failed'`, id)
+	if err != nil {
+		return fmt.Errorf("transfers.Engine.Retry: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("transfers.Engine.Retry: transfer not found or not in failed state")
+	}
+	_ = e.audit.Write(ctx, audit.Entry{
+		ActorType:  "system",
+		Action:     "transfer.retry",
+		TargetType: "transfer",
+		TargetID:   id,
+	})
+	e.broadcast(ProgressEvent{Type: "transfer.status", TransferID: id, Status: "queued"})
+	return nil
+}
+
+// ListByRequestID returns all transfers for a given request.
+func (e *Engine) ListByRequestID(ctx context.Context, requestID string) ([]*Transfer, error) {
+	rows, err := e.db.QueryContext(ctx,
+		`SELECT id, request_id, peer_id, item_id, status, bytes_total, bytes_done, error, queued_at, started_at, completed_at
+		 FROM transfers WHERE request_id = ? ORDER BY queued_at DESC`, requestID)
+	if err != nil {
+		return nil, fmt.Errorf("transfers.Engine.ListByRequestID: %w", err)
+	}
+	defer rows.Close()
+
+	var list []*Transfer
+	for rows.Next() {
+		t := &Transfer{}
+		if err := rows.Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.Status,
+			&t.BytesTotal, &t.BytesDone, &t.Error,
+			&t.QueuedAt, &t.StartedAt, &t.CompletedAt); err != nil {
+			return nil, fmt.Errorf("transfers.Engine.ListByRequestID: scan: %w", err)
+		}
+		list = append(list, t)
+	}
+	return list, rows.Err()
+}
+
 func (e *Engine) get(ctx context.Context, id string) (*Transfer, error) {
 	t := &Transfer{}
 	err := e.db.QueryRowContext(ctx,

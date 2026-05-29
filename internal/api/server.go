@@ -93,6 +93,7 @@ func (s *Server) Handler() http.Handler {
 	r.Post("/api/auth/logout", s.handleLogout)
 	r.Get("/api/auth/oidc", s.handleOIDCRedirect)
 	r.Get("/api/auth/oidc/callback", s.handleOIDCCallback)
+	r.Get("/api/auth/bootstrap-status", s.handleBootstrapStatus)
 
 	// Bootstrap — only works when zero users exist.
 	r.Post("/api/auth/bootstrap", s.handleBootstrap)
@@ -112,6 +113,9 @@ func (s *Server) Handler() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.auth.Middleware)
 
+		// Current user profile.
+		r.Get("/api/me", s.handleMe)
+
 		// Library.
 		r.Get("/api/library", s.handleLibraryList)
 		r.Get("/api/library/{id}", s.handleLibraryItem)
@@ -119,6 +123,8 @@ func (s *Server) Handler() http.Handler {
 		// Requests.
 		r.Get("/api/requests", s.handleRequestsList)
 		r.Post("/api/requests", s.handleRequestSubmit)
+		r.Delete("/api/requests/{id}", s.handleRequestCancel)
+		r.Get("/api/requests/{id}/transfers", s.handleRequestTransfers)
 
 		// Peers.
 		r.Post("/api/peers/accept", s.handlePeerAccept)
@@ -132,9 +138,14 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/api/requests/{id}/approve", s.handleRequestApprove)
 		r.Post("/api/requests/{id}/reject", s.handleRequestReject)
 
+		r.Get("/api/stats", s.handleStats)
+
 		r.Get("/api/transfers", s.handleTransfersList)
 		r.Post("/api/transfers/{id}/pause", s.handleTransferPause)
 		r.Post("/api/transfers/{id}/resume", s.handleTransferResume)
+		r.Post("/api/transfers/{id}/retry", s.handleTransferRetry)
+
+		r.Post("/api/config/scan", s.handleConfigScan)
 
 		r.Post("/api/peers/invite", s.handlePeerInvite)
 		r.Delete("/api/peers/{id}", s.handlePeerRevoke)
@@ -863,6 +874,129 @@ func (s *Server) handleAPIKeyRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Me handler ---
+
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromContext(r.Context())
+	writeJSON(w, map[string]any{
+		"id":            u.ID,
+		"username":      u.Username,
+		"display_name":  u.DisplayName,
+		"role":          u.Role,
+		"quota_gb":      u.QuotaGB,
+		"quota_used_gb": 0,
+	})
+}
+
+// --- Stats handler ---
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Item counts by media type.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT media_type, COUNT(*) FROM library_items WHERE peer_id IS NULL GROUP BY media_type`)
+	if err != nil {
+		slog.Error("stats: item counts", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	itemCounts := map[string]int64{}
+	for rows.Next() {
+		var mt string
+		var cnt int64
+		if err := rows.Scan(&mt, &cnt); err == nil {
+			itemCounts[mt] = cnt
+		}
+	}
+	rows.Close()
+
+	// Total local storage.
+	var totalStorage int64
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(file_size), 0) FROM library_items WHERE peer_id IS NULL`,
+	).Scan(&totalStorage)
+
+	// Active transfer count.
+	var activeTransfers int64
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM transfers WHERE status IN ('active', 'queued')`,
+	).Scan(&activeTransfers)
+
+	// Peer count.
+	var peerCount int64
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM peers WHERE status = 'active'`,
+	).Scan(&peerCount)
+
+	writeJSON(w, map[string]any{
+		"item_counts_by_type": itemCounts,
+		"total_storage_bytes": totalStorage,
+		"active_transfers":    activeTransfers,
+		"peer_count":          peerCount,
+	})
+}
+
+// --- Bootstrap status handler ---
+
+func (s *Server) handleBootstrapStatus(w http.ResponseWriter, r *http.Request) {
+	var count int
+	if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]bool{"bootstrapped": count > 0})
+}
+
+// --- Cancel request handler ---
+
+func (s *Server) handleRequestCancel(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	u := auth.UserFromContext(r.Context())
+	if err := s.requests.Cancel(r.Context(), id, u.ID, u.Role == "admin"); err != nil {
+		slog.Error("api.handleRequestCancel", "err", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Request transfers handler ---
+
+func (s *Server) handleRequestTransfers(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	list, err := s.transfers.ListByRequestID(r.Context(), id)
+	if err != nil {
+		slog.Error("api.handleRequestTransfers", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, list)
+}
+
+// --- Transfer retry handler ---
+
+func (s *Server) handleTransferRetry(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.transfers.Retry(r.Context(), id); err != nil {
+		slog.Error("api.handleTransferRetry", "err", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Global scan handler ---
+
+func (s *Server) handleConfigScan(w http.ResponseWriter, r *http.Request) {
+	go func() {
+		if err := s.scanner.ScanAll(context.Background()); err != nil {
+			slog.Error("api.handleConfigScan", "err", err)
+		}
+	}()
+	writeJSON(w, map[string]string{"status": "scan started"})
 }
 
 // --- Helpers ---

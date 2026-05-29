@@ -190,6 +190,36 @@ func (s *Store) List(ctx context.Context, userID string, adminView bool) ([]*Req
 	return reqs, rows.Err()
 }
 
+// Cancel cancels a pending request. Users can cancel their own; admins can cancel any.
+func (s *Store) Cancel(ctx context.Context, id, userID string, isAdmin bool) error {
+	req, err := s.get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("requests.Store.Cancel: %w", err)
+	}
+	if !isAdmin && req.UserID != userID {
+		return fmt.Errorf("requests.Store.Cancel: forbidden")
+	}
+	if req.Status != "pending" {
+		return fmt.Errorf("requests.Store.Cancel: request is not pending")
+	}
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE requests SET status = 'cancelled' WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("requests.Store.Cancel: %w", err)
+	}
+	_ = s.audit.Write(ctx, audit.Entry{
+		ActorID:    userID,
+		ActorType:  "user",
+		Action:     "request.cancel",
+		TargetType: "request",
+		TargetID:   id,
+	})
+	if s.dispatcher != nil {
+		s.dispatcher.Fire(ctx, "request.cancelled", map[string]any{"request_id": id})
+	}
+	return nil
+}
+
 func (s *Store) get(ctx context.Context, id string) (*Request, error) {
 	r := &Request{}
 	err := s.db.QueryRowContext(ctx,
