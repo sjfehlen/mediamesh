@@ -119,12 +119,15 @@ func (s *Server) Handler() http.Handler {
 
 		// Library.
 		r.Get("/api/library", s.handleLibraryList)
-		r.Get("/api/library/{id}", s.handleLibraryItem)
 
-		// TV hierarchy.
+		// TV hierarchy routes must be registered before /api/library/{id}.
+		// chi resolves by specificity (static segment "tv" wins over wildcard {id}),
+		// but the ordering makes the intent explicit.
 		r.Get("/api/library/tv", s.handleTVSeries)
 		r.Get("/api/library/tv/{series}", s.handleTVSeriesSeasons)
 		r.Get("/api/library/tv/{series}/{season_num}", s.handleTVEpisodes)
+
+		r.Get("/api/library/{id}", s.handleLibraryItem)
 
 		// Requests.
 		r.Get("/api/requests", s.handleRequestsList)
@@ -358,6 +361,10 @@ func (s *Server) handleTVSeriesSeasons(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if len(seasons) == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	writeJSON(w, seasons)
 }
 
@@ -373,6 +380,10 @@ func (s *Server) handleTVEpisodes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("api.handleTVEpisodes", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if len(episodes) == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, episodes)
@@ -1132,7 +1143,6 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 	if string(b) == "null" {
 		b = []byte("[]")
 	}
-	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(b)
 	_, _ = w.Write([]byte("\n"))
 }
