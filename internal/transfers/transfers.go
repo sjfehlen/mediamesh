@@ -245,15 +245,9 @@ func (e *Engine) executeTransfer(ctx context.Context, t *Transfer) error {
 		required := int64(float64(*item.FileSize) * 1.1)
 		available, err := AvailableBytes(filepath.Dir(destPath))
 		if err != nil {
+			// directory may not exist yet — check skipped, transfer proceeds without space verification.
 			slog.Warn("disk space check failed", "err", err)
 		} else if available < required {
-			_ = e.audit.Write(ctx, audit.Entry{
-				ActorType:  "system",
-				Action:     "transfer.failed",
-				TargetType: "transfer",
-				TargetID:   t.ID,
-				Detail:     "insufficient_disk_space",
-			})
 			return fmt.Errorf("insufficient_disk_space")
 		}
 	}
