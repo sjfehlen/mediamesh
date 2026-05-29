@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -119,6 +120,11 @@ func (s *Server) Handler() http.Handler {
 		// Library.
 		r.Get("/api/library", s.handleLibraryList)
 		r.Get("/api/library/{id}", s.handleLibraryItem)
+
+		// TV hierarchy.
+		r.Get("/api/library/tv", s.handleTVSeries)
+		r.Get("/api/library/tv/{series}", s.handleTVSeriesSeasons)
+		r.Get("/api/library/tv/{series}/{season_num}", s.handleTVEpisodes)
 
 		// Requests.
 		r.Get("/api/requests", s.handleRequestsList)
@@ -330,6 +336,46 @@ func (s *Server) handleLibraryItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, item)
+}
+
+// --- TV hierarchy handlers ---
+
+func (s *Server) handleTVSeries(w http.ResponseWriter, r *http.Request) {
+	series, err := catalog.GetTVSeries(r.Context(), s.db)
+	if err != nil {
+		slog.Error("api.handleTVSeries", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, series)
+}
+
+func (s *Server) handleTVSeriesSeasons(w http.ResponseWriter, r *http.Request) {
+	series := chi.URLParam(r, "series")
+	seasons, err := catalog.GetTVSeasons(r.Context(), s.db, series)
+	if err != nil {
+		slog.Error("api.handleTVSeriesSeasons", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, seasons)
+}
+
+func (s *Server) handleTVEpisodes(w http.ResponseWriter, r *http.Request) {
+	series := chi.URLParam(r, "series")
+	seasonStr := chi.URLParam(r, "season_num")
+	seasonNum, err := strconv.Atoi(seasonStr)
+	if err != nil {
+		http.Error(w, "invalid season_num", http.StatusBadRequest)
+		return
+	}
+	episodes, err := catalog.GetTVEpisodes(r.Context(), s.db, series, seasonNum)
+	if err != nil {
+		slog.Error("api.handleTVEpisodes", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, episodes)
 }
 
 // --- Request handlers ---
