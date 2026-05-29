@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,12 +23,12 @@ import (
 type MediaType string
 
 const (
-	Movie      MediaType = "movie"
-	TVShow     MediaType = "tvshow"
-	TVSeason   MediaType = "tvseason"
-	TVEpisode  MediaType = "tvepisode"
-	Audiobook  MediaType = "audiobook"
-	Ebook      MediaType = "ebook"
+	Movie     MediaType = "movie"
+	TVShow    MediaType = "tvshow"
+	TVSeason  MediaType = "tvseason"
+	TVEpisode MediaType = "tvepisode"
+	Audiobook MediaType = "audiobook"
+	Ebook     MediaType = "ebook"
 )
 
 // Item maps a library_items row.
@@ -41,6 +43,7 @@ type Item struct {
 	EpisodeNum   *int       `json:"episode_num,omitempty"`
 	RelativePath string     `json:"relative_path"`
 	FileSize     *int64     `json:"file_size,omitempty"`
+	TrackCount   *int       `json:"track_count,omitempty"`
 	TmdbID       *int64     `json:"tmdb_id,omitempty"`
 	OlKey        *string    `json:"ol_key,omitempty"`
 	PosterURL    *string    `json:"poster_url,omitempty"`
@@ -48,7 +51,55 @@ type Item struct {
 	Rating       *float64   `json:"rating,omitempty"`
 	Genres       *string    `json:"genres,omitempty"`
 	LastSeen     time.Time  `json:"last_seen"`
+	FileMtime    *time.Time `json:"file_mtime,omitempty"`
 	MetadataAt   *time.Time `json:"metadata_at,omitempty"`
+}
+
+// TVEpisodeInfo holds parsed fields from a TV episode filename.
+type TVEpisodeInfo struct {
+	SeasonNum  int
+	EpisodeNum int
+	Title      string // may be empty
+}
+
+// reEpisode matches patterns like S01E02, S1E2, S01E02 - Title, etc.
+var reEpisode = regexp.MustCompile(`(?i)[Ss](\d{1,2})[Ee](\d{1,2})(?:[Ee]\d{1,2})?(?:\s*[-–]\s*(.+))?`)
+
+// ignoredDirs is a set of folder names to skip during walking.
+var ignoredDirs = map[string]bool{
+	"@eaDir":           true,
+	"Extras":           true,
+	"Featurettes":      true,
+	"Behind The Scenes": true,
+	"Interviews":       true,
+	"Scenes":           true,
+	"Shorts":           true,
+	"Trailers":         true,
+}
+
+// ignoredFiles is a set of exact filenames to skip.
+var ignoredFiles = map[string]bool{
+	".DS_Store":    true,
+	"Thumbs.db":    true,
+	"feeder.json":  true,
+}
+
+// videoExts contains supported video file extensions.
+var videoExts = map[string]bool{
+	".mkv": true, ".mp4": true, ".avi": true, ".m4v": true,
+	".mov": true, ".ts": true, ".wmv": true, ".m2ts": true,
+}
+
+// audioExts contains supported audio file extensions.
+var audioExts = map[string]bool{
+	".mp3": true, ".m4b": true, ".flac": true, ".ogg": true,
+	".aac": true, ".opus": true, ".wav": true,
+}
+
+// ebookExts contains supported ebook file extensions.
+var ebookExts = map[string]bool{
+	".epub": true, ".pdf": true, ".mobi": true, ".azw3": true,
+	".cbz": true, ".cbr": true,
 }
 
 // Scanner walks media roots and upserts library items.
@@ -121,12 +172,27 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 }
 
 func (s *Scanner) scanRoot(ctx context.Context, root mediaRoot) (int, error) {
+	if root.mediaType == Audiobook {
+		return s.scanAudiobookRoot(ctx, root.path)
+	}
+	return s.scanFileRoot(ctx, root)
+}
+
+// scanFileRoot walks a root file-by-file (movies, TV, ebooks).
+func (s *Scanner) scanFileRoot(ctx context.Context, root mediaRoot) (int, error) {
 	var count int
 	err := filepath.WalkDir(root.path, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
 		}
 		if d.IsDir() {
+			if shouldSkipDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if shouldSkipFile(d.Name()) {
 			return nil
 		}
 
@@ -142,17 +208,52 @@ func (s *Scanner) scanRoot(ctx context.Context, root mediaRoot) (int, error) {
 
 		info, _ := d.Info()
 		var fileSize *int64
+		var fileMtime *time.Time
 		if info != nil {
 			sz := info.Size()
 			fileSize = &sz
+			mt := info.ModTime().UTC()
+			fileMtime = &mt
+		}
+
+		// Skip if mtime unchanged.
+		if s.mtimeUnchanged(ctx, "local:"+rel, fileMtime) {
+			return nil
 		}
 
 		mt := inferMediaType(root.mediaType, rel)
-		title, year := parseTitleYear(filepath.Base(rel))
+		base := filepath.Base(rel)
 
-		id := itemID("local:" + rel)
+		item := &Item{
+			ID:           itemID("local:" + rel),
+			MediaType:    mt,
+			RelativePath: rel,
+			FileSize:     fileSize,
+			FileMtime:    fileMtime,
+		}
 
-		if err := s.upsertItem(ctx, id, mt, title, year, rel, fileSize); err != nil {
+		if mt == TVEpisode {
+			ep := parseTVEpisode(base)
+			if ep != nil {
+				item.SeasonNum = &ep.SeasonNum
+				item.EpisodeNum = &ep.EpisodeNum
+				if ep.Title != "" {
+					item.Title = ep.Title
+				} else {
+					item.Title = base
+				}
+			} else {
+				item.Title, item.Year = parseTitleYear(base)
+			}
+			// Series name is the top-level folder under root.
+			parts := strings.SplitN(rel, string(filepath.Separator), 2)
+			series := parts[0]
+			item.Series = &series
+		} else {
+			item.Title, item.Year = parseTitleYear(base)
+		}
+
+		if err := s.upsertItem(ctx, item); err != nil {
 			slog.Error("upsert item failed", "path", rel, "err", err)
 			return nil
 		}
@@ -162,32 +263,137 @@ func (s *Scanner) scanRoot(ctx context.Context, root mediaRoot) (int, error) {
 	return count, err
 }
 
-func (s *Scanner) upsertItem(ctx context.Context, id string, mt MediaType, title string, year *int, relPath string, fileSize *int64) error {
+// scanAudiobookRoot treats each immediate subfolder as one audiobook.
+func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, error) {
+	entries, err := fs.ReadDir(newFS(rootPath), ".")
+	if err != nil {
+		return 0, fmt.Errorf("catalog.scanAudiobookRoot: %w", err)
+	}
+
+	var count int
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if shouldSkipDir(entry.Name()) {
+			continue
+		}
+
+		bookDir := filepath.Join(rootPath, entry.Name())
+		totalSize, trackCount, latestMtime := audiobookDirStats(bookDir)
+
+		rel := entry.Name()
+		key := "local:audiobook:" + rel
+
+		if s.mtimeUnchanged(ctx, key, latestMtime) {
+			continue
+		}
+
+		item := &Item{
+			ID:           itemID(key),
+			MediaType:    Audiobook,
+			Title:        entry.Name(),
+			RelativePath: rel,
+			FileSize:     &totalSize,
+			TrackCount:   &trackCount,
+			FileMtime:    latestMtime,
+		}
+
+		if err := s.upsertItem(ctx, item); err != nil {
+			slog.Error("upsert audiobook failed", "path", rel, "err", err)
+			continue
+		}
+		count++
+	}
+	return count, nil
+}
+
+// audiobookDirStats returns total size, track count, and latest mtime for audio files in a dir.
+func audiobookDirStats(dirPath string) (totalSize int64, trackCount int, latestMtime *time.Time) {
+	_ = filepath.WalkDir(dirPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if !audioExts[ext] {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		totalSize += info.Size()
+		trackCount++
+		mt := info.ModTime().UTC()
+		if latestMtime == nil || mt.After(*latestMtime) {
+			latestMtime = &mt
+		}
+		return nil
+	})
+	return
+}
+
+// newFS returns an fs.FS rooted at the given path.
+func newFS(root string) fs.FS {
+	return realFS{root}
+}
+
+type realFS struct{ root string }
+
+func (r realFS) Open(name string) (fs.File, error) {
+	return openFSFile(r.root, name)
+}
+
+// mtimeUnchanged returns true if the stored mtime for the given key matches the provided mtime.
+func (s *Scanner) mtimeUnchanged(ctx context.Context, key string, mtime *time.Time) bool {
+	if mtime == nil {
+		return false
+	}
+	id := itemID(key)
+	var stored sql.NullTime
+	_ = s.db.QueryRowContext(ctx, `SELECT file_mtime FROM library_items WHERE id = ?`, id).Scan(&stored)
+	if !stored.Valid {
+		return false
+	}
+	return stored.Time.UTC().Equal(mtime.UTC())
+}
+
+func (s *Scanner) upsertItem(ctx context.Context, item *Item) error {
 	now := time.Now().UTC()
+	item.LastSeen = now
+
 	var exists bool
-	_ = s.db.QueryRowContext(ctx, `SELECT 1 FROM library_items WHERE id = ?`, id).Scan(&exists)
+	_ = s.db.QueryRowContext(ctx, `SELECT 1 FROM library_items WHERE id = ?`, item.ID).Scan(&exists)
 
 	if exists {
 		_, err := s.db.ExecContext(ctx,
-			`UPDATE library_items SET last_seen = ?, file_size = ? WHERE id = ?`,
-			now, fileSize, id)
+			`UPDATE library_items SET last_seen = ?, file_size = ?, file_mtime = ?, track_count = ?,
+			  title = ?, series = ?, season_num = ?, episode_num = ?, media_type = ?
+			 WHERE id = ?`,
+			now, item.FileSize, item.FileMtime, item.TrackCount,
+			item.Title, item.Series, item.SeasonNum, item.EpisodeNum, string(item.MediaType),
+			item.ID)
 		return err
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO library_items (id, peer_id, media_type, title, year, relative_path, file_size, last_seen)
-		 VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
-		id, string(mt), title, year, relPath, fileSize, now,
+		`INSERT INTO library_items
+		  (id, peer_id, media_type, title, year, series, season_num, episode_num,
+		   relative_path, file_size, track_count, file_mtime, last_seen)
+		 VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.ID, string(item.MediaType), item.Title, item.Year,
+		item.Series, item.SeasonNum, item.EpisodeNum,
+		item.RelativePath, item.FileSize, item.TrackCount, item.FileMtime, now,
 	)
 	if err != nil {
-		return fmt.Errorf("insert library item: %w", err)
+		return fmt.Errorf("catalog.upsertItem: %w", err)
 	}
 	_ = s.audit.Write(ctx, audit.Entry{
 		ActorType:  "system",
 		Action:     "catalog.item_added",
 		TargetType: "library_item",
-		TargetID:   id,
-		Detail:     relPath,
+		TargetID:   item.ID,
+		Detail:     item.RelativePath,
 	})
 	return nil
 }
@@ -214,11 +420,11 @@ func (s *Scanner) StartScheduled(ctx context.Context, interval time.Duration) {
 func GetAll(ctx context.Context, db *sql.DB) ([]*Item, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, peer_id, media_type, title, year, series, season_num, episode_num,
-		        relative_path, file_size, tmdb_id, ol_key, poster_url, description,
-		        rating, genres, last_seen, metadata_at
+		        relative_path, file_size, track_count, tmdb_id, ol_key, poster_url, description,
+		        rating, genres, last_seen, file_mtime, metadata_at
 		 FROM library_items`)
 	if err != nil {
-		return nil, fmt.Errorf("query library items: %w", err)
+		return nil, fmt.Errorf("catalog.GetAll: %w", err)
 	}
 	defer rows.Close()
 	return scanItems(rows)
@@ -228,11 +434,11 @@ func GetAll(ctx context.Context, db *sql.DB) ([]*Item, error) {
 func GetByID(ctx context.Context, db *sql.DB, id string) (*Item, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, peer_id, media_type, title, year, series, season_num, episode_num,
-		        relative_path, file_size, tmdb_id, ol_key, poster_url, description,
-		        rating, genres, last_seen, metadata_at
+		        relative_path, file_size, track_count, tmdb_id, ol_key, poster_url, description,
+		        rating, genres, last_seen, file_mtime, metadata_at
 		 FROM library_items WHERE id = ?`, id)
 	if err != nil {
-		return nil, fmt.Errorf("query item: %w", err)
+		return nil, fmt.Errorf("catalog.GetByID: %w", err)
 	}
 	defer rows.Close()
 	items, err := scanItems(rows)
@@ -250,12 +456,12 @@ func GetStaleMetadata(ctx context.Context, db *sql.DB) ([]*Item, error) {
 	cutoff := time.Now().UTC().Add(-7 * 24 * time.Hour)
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, peer_id, media_type, title, year, series, season_num, episode_num,
-		        relative_path, file_size, tmdb_id, ol_key, poster_url, description,
-		        rating, genres, last_seen, metadata_at
+		        relative_path, file_size, track_count, tmdb_id, ol_key, poster_url, description,
+		        rating, genres, last_seen, file_mtime, metadata_at
 		 FROM library_items
 		 WHERE metadata_at IS NULL OR metadata_at < ?`, cutoff)
 	if err != nil {
-		return nil, fmt.Errorf("query stale metadata: %w", err)
+		return nil, fmt.Errorf("catalog.GetStaleMetadata: %w", err)
 	}
 	defer rows.Close()
 	return scanItems(rows)
@@ -268,11 +474,12 @@ func scanItems(rows *sql.Rows) ([]*Item, error) {
 		if err := rows.Scan(
 			&item.ID, &item.PeerID, &item.MediaType, &item.Title, &item.Year,
 			&item.Series, &item.SeasonNum, &item.EpisodeNum,
-			&item.RelativePath, &item.FileSize, &item.TmdbID, &item.OlKey,
+			&item.RelativePath, &item.FileSize, &item.TrackCount,
+			&item.TmdbID, &item.OlKey,
 			&item.PosterURL, &item.Description, &item.Rating, &item.Genres,
-			&item.LastSeen, &item.MetadataAt,
+			&item.LastSeen, &item.FileMtime, &item.MetadataAt,
 		); err != nil {
-			return nil, fmt.Errorf("scan item: %w", err)
+			return nil, fmt.Errorf("catalog.scanItems: %w", err)
 		}
 		items = append(items, item)
 	}
@@ -284,18 +491,20 @@ func itemID(key string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// isMediaFile reports whether ext is a valid media extension for the given type.
 func isMediaFile(ext string, mt MediaType) bool {
 	switch mt {
 	case Movie, TVShow, TVSeason, TVEpisode:
-		return ext == ".mkv" || ext == ".mp4" || ext == ".avi" || ext == ".mov"
+		return videoExts[ext]
 	case Audiobook:
-		return ext == ".mp3" || ext == ".m4b" || ext == ".flac" || ext == ".ogg"
+		return audioExts[ext]
 	case Ebook:
-		return ext == ".epub" || ext == ".mobi" || ext == ".pdf" || ext == ".azw3"
+		return ebookExts[ext]
 	}
 	return false
 }
 
+// inferMediaType returns the specific media type based on path depth within a TV root.
 func inferMediaType(root MediaType, rel string) MediaType {
 	if root != TVShow {
 		return root
@@ -311,6 +520,40 @@ func inferMediaType(root MediaType, rel string) MediaType {
 	}
 }
 
+// parseTVEpisode parses a filename for SxxExx patterns.
+// Returns nil if no pattern found.
+func parseTVEpisode(filename string) *TVEpisodeInfo {
+	name := strings.TrimSuffix(filename, filepath.Ext(filename))
+	m := reEpisode.FindStringSubmatch(name)
+	if m == nil {
+		return nil
+	}
+	season, _ := strconv.Atoi(m[1])
+	episode, _ := strconv.Atoi(m[2])
+	title := strings.TrimSpace(m[3])
+	// Strip trailing quality/codec tags from title (e.g. " 1080p", " BluRay")
+	if idx := indexQualityTag(title); idx > 0 {
+		title = strings.TrimRight(strings.TrimSpace(title[:idx]), "-–")
+		title = strings.TrimSpace(title)
+	}
+	return &TVEpisodeInfo{
+		SeasonNum:  season,
+		EpisodeNum: episode,
+		Title:      title,
+	}
+}
+
+// qualityTags are common suffixes to strip from parsed episode titles.
+var qualityTagRe = regexp.MustCompile(`(?i)\b(1080[pi]|720[pi]|4[kK]|2160[pi]|BluRay|BDRip|WEB-DL|WEBRip|HDTV|DVDRip|x264|x265|HEVC|H\.264|AAC|AC3|DTS|REMUX)\b`)
+
+func indexQualityTag(s string) int {
+	loc := qualityTagRe.FindStringIndex(s)
+	if loc == nil {
+		return -1
+	}
+	return loc[0]
+}
+
 func parseTitleYear(filename string) (string, *int) {
 	name := strings.TrimSuffix(filename, filepath.Ext(filename))
 	// Try to extract year in parens: "Title (2023)"
@@ -323,4 +566,18 @@ func parseTitleYear(filename string) (string, *int) {
 		}
 	}
 	return name, nil
+}
+
+// shouldSkipDir reports whether a directory name should be skipped entirely.
+func shouldSkipDir(name string) bool {
+	return ignoredDirs[name]
+}
+
+// shouldSkipFile reports whether a file should be skipped.
+func shouldSkipFile(name string) bool {
+	if ignoredFiles[name] {
+		return true
+	}
+	lower := strings.ToLower(name)
+	return strings.HasPrefix(lower, "sample-") || strings.HasPrefix(lower, "trailer-")
 }
