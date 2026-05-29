@@ -148,10 +148,16 @@ func Delete(ctx context.Context, db *sql.DB, id string) error {
 	if err != nil {
 		return err
 	}
-	// Delete all local items for this library — both by library_id (new) and
-	// by root_path (legacy items scanned before the library_id column existed).
+	// Delete items belonging to this library.
+	// Three cases handled:
+	// 1. library_id set correctly (scanned after migration 012)
+	// 2. root_path set but no library_id (scanned between migrations 010–012)
+	// 3. Both empty (scanned before migration 010) — orphans with no traceable owner;
+	//    delete them when any library is removed since they can't be attributed elsewhere.
 	if _, err := db.ExecContext(ctx,
-		`DELETE FROM library_items WHERE peer_id IS NULL AND (library_id = ? OR root_path = ?)`,
+		`DELETE FROM library_items
+		 WHERE peer_id IS NULL
+		   AND (library_id = ? OR root_path = ? OR (library_id IS NULL AND root_path = ''))`,
 		id, lib.Path,
 	); err != nil {
 		return fmt.Errorf("library.Delete items: %w", err)
