@@ -5,21 +5,21 @@ services:
     container_name: mediamesh
     restart: unless-stopped
     environment:
-      NODE_NAME: "Samuel's Media Mesh"
-      PUBLIC_URL: "https://mediamesh.fehlenfusion.com"
+      NODE_NAME: "Your Node Name"
+      PUBLIC_URL: "https://mediamesh.yourdomain.com"
       DATA_DIR: "/data"
-      JELLYFIN_URL: "http://10.5.1.57:30013"
+      JELLYFIN_URL: "http://your-jellyfin-host:8096"
       JELLYFIN_API_KEY: ""
-      ABS_URL: "http://10.5.1.57:30067"
+      ABS_URL: "http://your-abs-host:13378"
       ABS_API_KEY: ""
-      TMDB_API_KEY: ""  # Set your TMDB API key here or via environment
+      TMDB_API_KEY: ""
     volumes:
-      - /home/samuel/mediamesh-test/data:/data
-      - /home/samuel/mediamesh-test/movies:/media/movies
-      - /home/samuel/mediamesh-test/tv:/media/tv
-      - /home/samuel/mediamesh-test/audiobooks:/media/audiobooks
-      - /home/samuel/mediamesh-test/ebooks:/media/ebooks
-      - /home/samuel/mediamesh-test/audiobooks:/media/kids-audiobooks
-      - /home/samuel/mediamesh-test/ebooks:/media/kids-ebooks
+      - ./data:/data
+      - ./media/movies:/media/movies
+      - ./media/tv:/media/tv
+      - ./media/audiobooks:/media/audiobooks
+      - ./media/ebooks:/media/ebooks
+      - ./media/kids-audiobooks:/media/kids-audiobooks
+      - ./media/kids-ebooks:/media/kids-ebooks
     ports:
-      - "30090:8080"
+      - "8080:8080"

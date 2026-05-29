@@ -7,6 +7,8 @@ import { api, type Peer } from '../api/client'
 export default function Peers() {
   const qc = useQueryClient()
   const [inviteToken, setInviteToken] = useState<string | null>(null)
+  const [redeemInput, setRedeemInput] = useState('')
+  const [redeemError, setRedeemError] = useState<string | null>(null)
 
   const { data: peers = [], isLoading, error } = useQuery({
     queryKey: ['peers'],
@@ -16,6 +18,16 @@ export default function Peers() {
   const generateInvite = useMutation({
     mutationFn: () => api.post<{ token: string }>('/api/peers/invite'),
     onSuccess: (res) => setInviteToken(res.token),
+  })
+
+  const redeemInvite = useMutation({
+    mutationFn: (token: string) => api.post<Peer>('/api/peers/accept', { token }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['peers'] })
+      setRedeemInput('')
+      setRedeemError(null)
+    },
+    onError: (err: Error) => setRedeemError(err.message),
   })
 
   const revoke = useMutation({
@@ -39,6 +51,27 @@ export default function Peers() {
         >
           Generate Invite
         </button>
+      </div>
+
+      <div className="bg-gray-50 border border-gray-200 rounded-md p-4 space-y-2">
+        <p className="text-sm font-medium text-gray-700">Redeem an invite token from another node:</p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={redeemInput}
+            onChange={(e) => { setRedeemInput(e.target.value); setRedeemError(null) }}
+            placeholder="Paste invite token…"
+            className="flex-1 text-xs border rounded px-3 py-2 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            onClick={() => redeemInvite.mutate(redeemInput.trim())}
+            disabled={redeemInvite.isPending || !redeemInput.trim()}
+            className="px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700 disabled:opacity-50"
+          >
+            {redeemInvite.isPending ? 'Connecting…' : 'Connect'}
+          </button>
+        </div>
+        {redeemError && <p className="text-xs text-red-600">{redeemError}</p>}
       </div>
 
       {inviteToken && (
