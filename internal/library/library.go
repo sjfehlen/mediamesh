@@ -148,11 +148,11 @@ func Delete(ctx context.Context, db *sql.DB, id string) error {
 	if err != nil {
 		return err
 	}
-	// Explicitly delete legacy items (library_id IS NULL) matched by root_path.
-	// Items with library_id set are removed automatically via ON DELETE CASCADE.
+	// Delete all local items for this library — both by library_id (new) and
+	// by root_path (legacy items scanned before the library_id column existed).
 	if _, err := db.ExecContext(ctx,
-		`DELETE FROM library_items WHERE peer_id IS NULL AND library_id IS NULL AND root_path = ?`,
-		lib.Path,
+		`DELETE FROM library_items WHERE peer_id IS NULL AND (library_id = ? OR root_path = ?)`,
+		id, lib.Path,
 	); err != nil {
 		return fmt.Errorf("library.Delete items: %w", err)
 	}
