@@ -1,8 +1,5 @@
 package main
 
-// Version is injected at build time via -ldflags "-X main.Version=<git-sha>".
-var Version = "dev"
-
 import (
 	"context"
 	"log/slog"
@@ -27,6 +24,9 @@ import (
 	"github.com/sjfehlen/mediamesh/internal/users"
 	"github.com/sjfehlen/mediamesh/internal/webhooks"
 )
+
+// Version is injected at build time via -ldflags "-X main.Version=<git-sha>".
+var Version = "dev"
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
