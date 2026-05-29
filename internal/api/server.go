@@ -704,10 +704,13 @@ func (s *Server) handlePeerRevoke(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePeerSync(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	slog.Info("manual peer sync requested", "peer", id)
 	if err := s.peers.SyncPeer(r.Context(), id); err != nil {
+		slog.Error("peer sync failed", "peer", id, "err", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	slog.Info("manual peer sync complete", "peer", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 

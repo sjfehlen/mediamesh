@@ -159,13 +159,21 @@ func (m *Manager) AcceptInvite(ctx context.Context, tokenStr, endpointOverride s
 
 	// Kick off an initial catalog exchange in the background so both sides
 	// see each other's media without waiting for the next scheduled sync.
+	// Small delay gives the remote node time to finish storing this peer before
+	// we send authenticated requests.
 	go func() {
+		time.Sleep(2 * time.Second)
 		bgCtx := context.Background()
+		slog.Info("starting initial catalog sync", "peer", peer.ID, "endpoint", peer.Endpoint)
 		if err := m.PushCatalog(bgCtx, peer); err != nil {
 			slog.Error("initial catalog push failed", "peer", peer.ID, "err", err)
+		} else {
+			slog.Info("initial catalog push done", "peer", peer.ID)
 		}
 		if err := m.PullCatalog(bgCtx, peer); err != nil {
 			slog.Error("initial catalog pull failed", "peer", peer.ID, "err", err)
+		} else {
+			slog.Info("initial catalog pull done", "peer", peer.ID)
 		}
 	}()
 
