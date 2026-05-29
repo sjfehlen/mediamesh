@@ -1,8 +1,13 @@
 package main
 
+//go:embed ../../migrations
+var migrationsDir embed.FS
+
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -52,7 +57,12 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// database is *sql.DB (used by sqlc-generated code and most packages).
 	// _ is *sqlx.DB (available for ad-hoc queries; not wired here yet but
 	//   packages may accept it when convenient).
-	database, _, err := db.Open(cfg.DataDir)
+	migrationsFS, err := fs.Sub(migrationsDir, "migrations")
+	if err != nil {
+		slog.Error("failed to get migrations FS", "err", err)
+		os.Exit(1)
+	}
+	database, _, err := db.Open(cfg.DataDir, migrationsFS)
 	if err != nil {
 		return err
 	}

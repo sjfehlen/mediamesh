@@ -1,23 +1,23 @@
 package db_test
 
 import (
-	"os"
 	"testing"
+	"testing/fstest"
 
 	"github.com/sjfehlen/mediamesh/internal/db"
 )
 
 func TestOpen(t *testing.T) {
 	dir := t.TempDir()
-	// Migrations are resolved relative to the working directory;
-	// this test is run from the package directory so we need to
-	// point at the repo-root migrations folder.
-	// Skip if not running from repo root (CI sets working dir correctly).
-	if _, err := os.Stat("../../migrations"); os.IsNotExist(err) {
-		t.Skip("migrations folder not found; skipping integration test")
+
+	// Build a minimal in-memory FS with a no-op migration so the test
+	// has no dependency on the real migrations directory.
+	migrationsFS := fstest.MapFS{
+		"1_init.up.sql":   {Data: []byte("CREATE TABLE IF NOT EXISTS _test (id INTEGER PRIMARY KEY);")},
+		"1_init.down.sql": {Data: []byte("DROP TABLE IF EXISTS _test;")},
 	}
 
-	database, dbx, err := db.Open(dir)
+	database, dbx, err := db.Open(dir, migrationsFS)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -30,4 +30,6 @@ func TestOpen(t *testing.T) {
 	if dbx == nil {
 		t.Fatal("expected non-nil sqlx.DB")
 	}
+
+
 }
