@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -239,6 +240,24 @@ func (e *Engine) executeTransfer(ctx context.Context, t *Transfer) error {
 		return fmt.Errorf("transfers.Engine.executeTransfer: path validation: %w", err)
 	}
 
+	// Disk space check.
+	if item.FileSize != nil {
+		required := int64(float64(*item.FileSize) * 1.1)
+		available, err := AvailableBytes(filepath.Dir(destPath))
+		if err != nil {
+			slog.Warn("disk space check failed", "err", err)
+		} else if available < required {
+			_ = e.audit.Write(ctx, audit.Entry{
+				ActorType:  "system",
+				Action:     "transfer.failed",
+				TargetType: "transfer",
+				TargetID:   t.ID,
+				Detail:     "insufficient_disk_space",
+			})
+			return fmt.Errorf("insufficient_disk_space")
+		}
+	}
+
 	// Fetch from peer.
 	fileURL := sourcePeer.Endpoint + "/api/peer/files/" + t.ItemID
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
@@ -442,6 +461,16 @@ func (e *Engine) RescanLocal(ctx context.Context, mediaType string) error {
 		resp.Body.Close()
 	}
 	return nil
+}
+
+// AvailableBytes returns the number of available bytes on the filesystem
+// containing the given path.
+func AvailableBytes(path string) (int64, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0, fmt.Errorf("transfers.AvailableBytes: %w", err)
+	}
+	return int64(stat.Bavail) * int64(stat.Bsize), nil
 }
 
 func (e *Engine) markFailed(ctx context.Context, id, errMsg string) {

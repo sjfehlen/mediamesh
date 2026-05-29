@@ -939,11 +939,39 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		`SELECT COUNT(*) FROM peers WHERE status = 'active'`,
 	).Scan(&peerCount)
 
+	// Disk space per library root.
+	type DiskSpaceEntry struct {
+		Path           string `json:"path"`
+		AvailableBytes int64  `json:"available_bytes"`
+	}
+	libRows, err := s.db.QueryContext(ctx,
+		`SELECT path FROM libraries WHERE enabled = 1`)
+	var diskSpace []DiskSpaceEntry
+	if err != nil {
+		slog.Warn("stats: query libraries", "err", err)
+	} else {
+		defer libRows.Close()
+		for libRows.Next() {
+			var path string
+			if scanErr := libRows.Scan(&path); scanErr != nil {
+				slog.Warn("stats: scan library path", "err", scanErr)
+				continue
+			}
+			avail, availErr := transfers.AvailableBytes(path)
+			if availErr != nil {
+				slog.Warn("stats: available bytes", "path", path, "err", availErr)
+				avail = -1
+			}
+			diskSpace = append(diskSpace, DiskSpaceEntry{Path: path, AvailableBytes: avail})
+		}
+	}
+
 	writeJSON(w, map[string]any{
 		"item_counts_by_type": itemCounts,
 		"total_storage_bytes": totalStorage,
 		"active_transfers":    activeTransfers,
 		"peer_count":          peerCount,
+		"disk_space":          diskSpace,
 	})
 }
 
