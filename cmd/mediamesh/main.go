@@ -18,7 +18,6 @@ import (
 	"github.com/sjfehlen/mediamesh/internal/config"
 	"github.com/sjfehlen/mediamesh/internal/db"
 	"github.com/sjfehlen/mediamesh/internal/identity"
-	"github.com/sjfehlen/mediamesh/internal/library"
 	"github.com/sjfehlen/mediamesh/internal/metadata"
 	"github.com/sjfehlen/mediamesh/internal/peers"
 	"github.com/sjfehlen/mediamesh/internal/requests"
@@ -65,12 +64,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 
-	// 3. Seed default libraries for any standard mount paths that exist.
-	if err := library.SeedDefaults(ctx, database); err != nil {
-		return fmt.Errorf("seed libraries: %w", err)
-	}
-
-	// 4. Init audit log.
+	// 3. Init audit log.
 	auditLog := audit.New(database)
 
 	// 4. Init users store.
