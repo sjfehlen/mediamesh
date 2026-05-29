@@ -41,6 +41,7 @@ type Item struct {
 	Series       *string    `json:"series,omitempty"`
 	SeasonNum    *int       `json:"season_num,omitempty"`
 	EpisodeNum   *int       `json:"episode_num,omitempty"`
+	RootPath     string     `json:"root_path"`
 	RelativePath string     `json:"relative_path"`
 	FileSize     *int64     `json:"file_size,omitempty"`
 	TrackCount   *int       `json:"track_count,omitempty"`
@@ -172,15 +173,32 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 }
 
 func (s *Scanner) scanRoot(ctx context.Context, root mediaRoot) (int, error) {
+	var (
+		count int
+		seen  map[string]struct{}
+		err   error
+	)
 	if root.mediaType == Audiobook {
-		return s.scanAudiobookRoot(ctx, root.path)
+		count, seen, err = s.scanAudiobookRoot(ctx, root.path)
+	} else {
+		count, seen, err = s.scanFileRoot(ctx, root)
 	}
-	return s.scanFileRoot(ctx, root)
+	if err != nil {
+		return count, err
+	}
+	pruned, pruneErr := s.pruneRoot(ctx, root.path, seen)
+	if pruneErr != nil {
+		slog.Error("prune root failed", "root", root.path, "err", pruneErr)
+	} else if pruned > 0 {
+		slog.Info("catalog pruned deleted items", "root", root.path, "removed", pruned)
+	}
+	return count, nil
 }
 
 // scanFileRoot walks a root file-by-file (movies, TV, ebooks).
-func (s *Scanner) scanFileRoot(ctx context.Context, root mediaRoot) (int, error) {
+func (s *Scanner) scanFileRoot(ctx context.Context, root mediaRoot) (int, map[string]struct{}, error) {
 	var count int
+	seen := make(map[string]struct{})
 	err := filepath.WalkDir(root.path, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
@@ -206,6 +224,8 @@ func (s *Scanner) scanFileRoot(ctx context.Context, root mediaRoot) (int, error)
 			return nil
 		}
 
+		seen[rel] = struct{}{}
+
 		info, _ := d.Info()
 		var fileSize *int64
 		var fileMtime *time.Time
@@ -227,6 +247,7 @@ func (s *Scanner) scanFileRoot(ctx context.Context, root mediaRoot) (int, error)
 		item := &Item{
 			ID:           itemID("local:" + rel),
 			MediaType:    mt,
+			RootPath:     root.path,
 			RelativePath: rel,
 			FileSize:     fileSize,
 			FileMtime:    fileMtime,
@@ -260,19 +281,20 @@ func (s *Scanner) scanFileRoot(ctx context.Context, root mediaRoot) (int, error)
 		count++
 		return nil
 	})
-	return count, err
+	return count, seen, err
 }
 
 // scanAudiobookRoot treats each immediate subfolder as one audiobook.
 // It expects a flat layout: one subfolder per book directly under the root.
 // Two-level author/book layouts are not supported — each top-level folder is treated as one book.
-func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, error) {
+func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, map[string]struct{}, error) {
 	entries, err := fs.ReadDir(newFS(rootPath), ".")
 	if err != nil {
-		return 0, fmt.Errorf("catalog.scanAudiobookRoot: %w", err)
+		return 0, nil, fmt.Errorf("catalog.scanAudiobookRoot: %w", err)
 	}
 
 	var count int
+	seen := make(map[string]struct{})
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -285,6 +307,7 @@ func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, 
 		totalSize, trackCount, latestMtime := audiobookDirStats(bookDir)
 
 		rel := entry.Name()
+		seen[rel] = struct{}{}
 		key := "local:" + rel
 
 		if s.mtimeUnchanged(ctx, key, latestMtime) {
@@ -294,6 +317,7 @@ func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, 
 		item := &Item{
 			ID:           itemID(key),
 			MediaType:    Audiobook,
+			RootPath:     rootPath,
 			Title:        entry.Name(),
 			RelativePath: rel,
 			FileSize:     &totalSize,
@@ -307,7 +331,7 @@ func (s *Scanner) scanAudiobookRoot(ctx context.Context, rootPath string) (int, 
 		}
 		count++
 	}
-	return count, nil
+	return count, seen, nil
 }
 
 // audiobookDirStats returns total size, track count, and latest mtime for audio files in a dir.
@@ -344,6 +368,48 @@ type realFS struct{ root string }
 
 func (r realFS) Open(name string) (fs.File, error) {
 	return openFSFile(r.root, name)
+}
+
+// pruneRoot deletes local catalog entries whose relative_path is no longer present on disk
+// for the given root. seen is the set of relative paths collected during the scan pass.
+func (s *Scanner) pruneRoot(ctx context.Context, rootPath string, seen map[string]struct{}) (int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, relative_path FROM library_items WHERE peer_id IS NULL AND root_path = ?`,
+		rootPath,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("catalog.pruneRoot: query: %w", err)
+	}
+	defer rows.Close()
+
+	var toDelete []string
+	for rows.Next() {
+		var id, rel string
+		if err := rows.Scan(&id, &rel); err != nil {
+			continue
+		}
+		if _, ok := seen[rel]; !ok {
+			toDelete = append(toDelete, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("catalog.pruneRoot: rows: %w", err)
+	}
+
+	for _, id := range toDelete {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM library_items WHERE id = ?`, id); err != nil {
+			slog.Error("prune item failed", "id", id, "err", err)
+			continue
+		}
+		BumpVersion(ctx, s.db)
+		_ = s.audit.Write(ctx, audit.Entry{
+			ActorType:  "system",
+			Action:     "catalog.item_removed",
+			TargetType: "library_item",
+			TargetID:   id,
+		})
+	}
+	return len(toDelete), nil
 }
 
 // mtimeUnchanged returns true if the stored mtime for the given key matches the provided mtime.
@@ -399,11 +465,11 @@ func (s *Scanner) upsertItem(ctx context.Context, item *Item) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO library_items
 		  (id, peer_id, media_type, title, year, series, season_num, episode_num,
-		   relative_path, file_size, track_count, file_mtime, last_seen, catalog_version)
-		 VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   root_path, relative_path, file_size, track_count, file_mtime, last_seen, catalog_version)
+		 VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID, string(item.MediaType), item.Title, item.Year,
 		item.Series, item.SeasonNum, item.EpisodeNum,
-		item.RelativePath, item.FileSize, item.TrackCount, item.FileMtime, now, cv,
+		item.RootPath, item.RelativePath, item.FileSize, item.TrackCount, item.FileMtime, now, cv,
 	)
 	if err != nil {
 		return fmt.Errorf("catalog.upsertItem: %w", err)

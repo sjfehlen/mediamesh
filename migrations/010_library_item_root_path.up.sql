@@ -1,0 +1,1 @@
+ALTER TABLE library_items ADD COLUMN root_path TEXT NOT NULL DEFAULT '';
