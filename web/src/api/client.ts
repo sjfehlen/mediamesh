@@ -139,3 +139,10 @@ export interface AuditEntry {
   detail: string
   occurred_at: string
 }
+
+export const getItem = (id: string) => api.get<LibraryItem>(`/api/library/${id}`)
+
+export const getPeers = () => api.get<Peer[]>('/api/peers')
+
+export const submitRequest = (itemId: string, note?: string) =>
+  api.post<Request>('/api/requests', { item_id: itemId, note })
