@@ -903,15 +903,23 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	defer rows.Close()
 	itemCounts := map[string]int64{}
 	for rows.Next() {
 		var mt string
 		var cnt int64
-		if err := rows.Scan(&mt, &cnt); err == nil {
-			itemCounts[mt] = cnt
+		if err := rows.Scan(&mt, &cnt); err != nil {
+			slog.Error("stats: scan row", "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
 		}
+		itemCounts[mt] = cnt
 	}
-	rows.Close()
+	if err := rows.Err(); err != nil {
+		slog.Error("stats: rows error", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	// Total local storage.
 	var totalStorage int64
@@ -957,7 +965,17 @@ func (s *Server) handleRequestCancel(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
 	if err := s.requests.Cancel(r.Context(), id, u.ID, u.Role == "admin"); err != nil {
 		slog.Error("api.handleRequestCancel", "err", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "forbidden"):
+			http.Error(w, "forbidden", http.StatusForbidden)
+		case strings.Contains(msg, "not pending"):
+			http.Error(w, "request is not pending", http.StatusConflict)
+		case strings.Contains(msg, "sql: no rows"):
+			http.Error(w, "not found", http.StatusNotFound)
+		default:
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -982,7 +1000,15 @@ func (s *Server) handleTransferRetry(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := s.transfers.Retry(r.Context(), id); err != nil {
 		slog.Error("api.handleTransferRetry", "err", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "not found or not in failed state"):
+			http.Error(w, "transfer not found or not in failed state", http.StatusConflict)
+		case strings.Contains(msg, "sql: no rows"):
+			http.Error(w, "not found", http.StatusNotFound)
+		default:
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
