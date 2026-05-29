@@ -10,7 +10,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jmoiron/sqlx"
-	"github.com/mattn/go-sqlite3"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // Open opens (or creates) the SQLite database at dataDir/mediamesh.db,
@@ -18,24 +18,16 @@ import (
 // the provided FS (expected to contain *.sql files at the root).
 // Returns both a *sql.DB (for sqlc-generated code) and a *sqlx.DB (for
 // ad-hoc queries that benefit from sqlx convenience methods).
-func init() {
-	// Register a custom driver that enforces WAL mode and foreign keys on every
-	// connection in the pool. The DSN pragmas only apply to the first connection;
-	// subsequent pool connections need this hook.
-	sql.Register("sqlite3_mediamesh", &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			_, err := conn.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;", nil)
-			return err
-		},
-	})
-}
-
 func Open(dataDir string, migrationsFS fs.FS) (*sql.DB, *sqlx.DB, error) {
-	dsn := fmt.Sprintf("file:%s/mediamesh.db", dataDir)
-	db, err := sql.Open("sqlite3_mediamesh", dsn)
+	dsn := fmt.Sprintf("file:%s/mediamesh.db?_journal_mode=WAL&_foreign_keys=on", dataDir)
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db.Open: open sqlite: %w", err)
 	}
+
+	// SQLite pragmas in the DSN apply per-connection. Limiting to one connection
+	// ensures WAL mode and foreign keys are always active.
+	db.SetMaxOpenConns(1)
 
 	if err := db.Ping(); err != nil {
 		return nil, nil, fmt.Errorf("db.Open: ping sqlite: %w", err)
