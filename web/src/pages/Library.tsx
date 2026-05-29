@@ -1,18 +1,24 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Search, Film, Book, Headphones } from 'lucide-react'
+import { Search, Film, Book, Headphones, Tv } from 'lucide-react'
 import { api, type LibraryItem } from '../api/client'
+import ItemDetailPanel from '../components/ItemDetailPanel'
 
 const mediaTypeIcons: Record<string, React.ReactNode> = {
   movie: <Film className="w-4 h-4" />,
-  tvshow: <Film className="w-4 h-4" />,
+  tvshow: <Tv className="w-4 h-4" />,
+  tvepisode: <Tv className="w-4 h-4" />,
+  tvseason: <Tv className="w-4 h-4" />,
   audiobook: <Headphones className="w-4 h-4" />,
   ebook: <Book className="w-4 h-4" />,
 }
 
-function MediaCard({ item }: { item: LibraryItem }) {
+function MediaCard({ item, onClick }: { item: LibraryItem; onClick: () => void }) {
   return (
-    <div className="bg-white rounded-lg shadow overflow-hidden flex flex-col">
+    <div
+      className="bg-white rounded-lg shadow overflow-hidden flex flex-col cursor-pointer hover:shadow-md hover:ring-2 hover:ring-blue-200 transition-shadow"
+      onClick={onClick}
+    >
       {item.poster_url ? (
         <img
           src={item.poster_url}
@@ -43,6 +49,7 @@ function MediaCard({ item }: { item: LibraryItem }) {
 export default function Library() {
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
 
   const { data: items = [], isLoading, error } = useQuery({
     queryKey: ['library', search, typeFilter],
@@ -92,10 +99,19 @@ export default function Library() {
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
           {items.map((item) => (
-            <MediaCard key={item.id} item={item} />
+            <MediaCard
+              key={item.id}
+              item={item}
+              onClick={() => setSelectedItemId(item.id)}
+            />
           ))}
         </div>
       )}
+
+      <ItemDetailPanel
+        itemId={selectedItemId}
+        onClose={() => setSelectedItemId(null)}
+      />
     </div>
   )
 }
