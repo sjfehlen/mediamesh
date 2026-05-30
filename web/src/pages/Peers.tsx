@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { clsx } from 'clsx'
-import { Wifi, WifiOff, Copy, Check } from 'lucide-react'
+import { Wifi, WifiOff, Copy, Check, Pencil } from 'lucide-react'
 import { api, type Peer } from '../api/client'
 
 export default function Peers() {
@@ -11,6 +11,8 @@ export default function Peers() {
   const [redeemUrl, setRedeemUrl] = useState('')
   const [redeemToken, setRedeemToken] = useState('')
   const [redeemError, setRedeemError] = useState<string | null>(null)
+  const [editingPeer, setEditingPeer] = useState<string | null>(null)
+  const [editEndpoint, setEditEndpoint] = useState('')
 
   const { data: peers = [], isLoading, error } = useQuery({
     queryKey: ['peers'],
@@ -43,6 +45,15 @@ export default function Peers() {
 
   const sync = useMutation({
     mutationFn: (id: string) => api.post(`/api/peers/${id}/sync`),
+  })
+
+  const patchEndpoint = useMutation({
+    mutationFn: ({ id, endpoint }: { id: string; endpoint: string }) =>
+      api.patch(`/api/peers/${id}`, { endpoint }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['peers'] })
+      setEditingPeer(null)
+    },
   })
 
   function handleRevoke(id: string) {
@@ -160,7 +171,36 @@ export default function Peers() {
                   <WifiOff className="w-4 h-4 text-gray-400" />
                 )}
               </div>
-              <p className="text-xs text-gray-500 break-all">{p.endpoint}</p>
+              {editingPeer === p.id ? (
+                <div className="flex gap-1">
+                  <input
+                    type="text"
+                    value={editEndpoint}
+                    onChange={(e) => setEditEndpoint(e.target.value)}
+                    className="flex-1 text-xs border rounded px-2 py-1 font-mono"
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => patchEndpoint.mutate({ id: p.id, endpoint: editEndpoint })}
+                    className="text-xs text-green-600 hover:underline"
+                  >Save</button>
+                  <button
+                    onClick={() => setEditingPeer(null)}
+                    className="text-xs text-gray-400 hover:underline"
+                  >Cancel</button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <p className="text-xs text-gray-500 break-all flex-1">{p.endpoint}</p>
+                  <button
+                    onClick={() => { setEditingPeer(p.id); setEditEndpoint(p.endpoint) }}
+                    className="shrink-0 text-gray-300 hover:text-gray-500"
+                    title="Edit endpoint"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
               <div className="flex items-center justify-between text-xs">
                 <span
                   className={clsx(

@@ -206,6 +206,7 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/api/peers/invite", s.handlePeerInvite)
 		r.Delete("/api/peers/{id}", s.handlePeerRevoke)
 		r.Post("/api/peers/{id}/sync", s.handlePeerSync)
+		r.Patch("/api/peers/{id}", s.handlePeerPatch)
 
 		r.Get("/api/users", s.handleUsersList)
 		r.Post("/api/users", s.handleUserCreate)
@@ -697,6 +698,24 @@ func (s *Server) handlePeerRevoke(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := s.peers.Revoke(r.Context(), id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePeerPatch(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Endpoint == "" {
+		http.Error(w, "endpoint required", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.db.ExecContext(r.Context(),
+		`UPDATE peers SET endpoint = ? WHERE id = ?`, body.Endpoint, id,
+	); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
