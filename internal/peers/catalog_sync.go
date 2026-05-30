@@ -105,8 +105,11 @@ func (m *Manager) PushCatalog(ctx context.Context, peer *Peer) error {
 		return fmt.Errorf("peers.PushCatalog: fetch items: %w", err)
 	}
 
+	slog.Info("catalog push starting", "peer", peer.ID, "endpoint", peer.Endpoint, "items", len(items), "isDelta", isDelta)
+
 	// Nothing new to push.
 	if isDelta && len(items) == 0 {
+		slog.Info("catalog push skipped: delta with no new items", "peer", peer.ID)
 		return nil
 	}
 

@@ -119,6 +119,37 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, map[string]int64{"deleted": n})
 	})
 
+	r.Get("/api/debug/peers", func(w http.ResponseWriter, r *http.Request) {
+		type peerDebug struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Endpoint string `json:"endpoint"`
+			Status   string `json:"status"`
+			Reachable *bool  `json:"reachable"`
+			PingErr  string `json:"ping_error,omitempty"`
+		}
+		peers, _ := s.peers.List(r.Context())
+		var result []peerDebug
+		for _, p := range peers {
+			pd := peerDebug{ID: p.ID, Name: p.DisplayName, Endpoint: p.Endpoint, Status: p.Status}
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, p.Endpoint+"/api/peer/ping", nil)
+			if err == nil {
+				_ = s.peers.SignRequest(req)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					f := false; pd.Reachable = &f; pd.PingErr = err.Error()
+				} else {
+					resp.Body.Close()
+					t := resp.StatusCode == http.StatusOK
+					pd.Reachable = &t
+					if !t { pd.PingErr = fmt.Sprintf("status %d", resp.StatusCode) }
+				}
+			}
+			result = append(result, pd)
+		}
+		writeJSON(w, result)
+	})
+
 	r.Get("/api/debug/items", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := s.db.QueryContext(r.Context(),
 			`SELECT COALESCE(peer_id,'LOCAL') as peer, COALESCE(library_id,'NULL') as lib,
