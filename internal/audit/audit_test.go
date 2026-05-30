@@ -24,6 +24,7 @@ func newTestDB(t *testing.T) *sql.DB {
 		target_type TEXT,
 		target_id TEXT,
 		detail TEXT,
+		error_code TEXT,
 		occurred_at DATETIME NOT NULL
 	)`)
 	if err != nil {
