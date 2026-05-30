@@ -223,9 +223,10 @@ func (m *Manager) ReceiveCatalog(ctx context.Context, peerID string, push Catalo
 		rows.Close()
 
 		for _, id := range toRemove {
-			_, _ = m.db.ExecContext(ctx,
-				`UPDATE library_items SET last_seen = ? WHERE id = ?`,
-				time.Time{}, id)
+			_, _ = m.db.ExecContext(ctx, `DELETE FROM library_items WHERE id = ?`, id)
+		}
+		if len(toRemove) > 0 {
+			slog.Info("catalog pruned remote items", "peer", peerID, "removed", len(toRemove))
 		}
 	}
 

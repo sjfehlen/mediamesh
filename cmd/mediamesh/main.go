@@ -80,7 +80,6 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	// 6. Init catalog scanner, start scheduled scan (1 hour interval).
 	scanner := catalog.NewScanner(database, cfg, auditLog)
-	scanner.StartScheduled(ctx, time.Hour)
 
 	// 7. Init metadata fetcher, start scheduled enrich (12 hour interval).
 	metaFetcher := metadata.New(cfg)
@@ -88,6 +87,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	// 8. Init peers manager.
 	peerMgr := peers.New(database, id, cfg, auditLog)
+
+	// Push catalog to all peers after every scan so deletions propagate immediately.
+	scanner.OnScanDone(func(c context.Context) {
+		if err := peerMgr.SyncAll(c); err != nil {
+			slog.Error("post-scan peer sync failed", "err", err)
+		}
+	})
+	scanner.StartScheduled(ctx, time.Hour)
 
 	// 9. Start peer heartbeat.
 	peerMgr.StartHeartbeat(ctx)

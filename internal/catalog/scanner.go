@@ -107,14 +107,20 @@ var ebookExts = map[string]bool{
 
 // Scanner walks media roots and upserts library items.
 type Scanner struct {
-	db    *sql.DB
-	cfg   *config.Config
-	audit *audit.Log
+	db       *sql.DB
+	cfg      *config.Config
+	audit    *audit.Log
+	onScanDone func(ctx context.Context) // called after every successful ScanAll
 }
 
 // NewScanner creates a new Scanner.
 func NewScanner(db *sql.DB, cfg *config.Config, a *audit.Log) *Scanner {
 	return &Scanner{db: db, cfg: cfg, audit: a}
+}
+
+// OnScanDone registers a callback fired after every successful ScanAll.
+func (s *Scanner) OnScanDone(fn func(ctx context.Context)) {
+	s.onScanDone = fn
 }
 
 type mediaRoot struct {
@@ -172,6 +178,9 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		Action:    "catalog.scan",
 		Detail:    fmt.Sprintf("found %d items", total),
 	})
+	if s.onScanDone != nil {
+		go s.onScanDone(ctx)
+	}
 	return nil
 }
 
