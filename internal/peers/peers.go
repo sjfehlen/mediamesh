@@ -233,7 +233,7 @@ func (m *Manager) callHandshake(ctx context.Context, endpoint string, _ ed25519.
 	return &Peer{
 		ID:          result.PeerID,
 		DisplayName: result.DisplayName,
-		Endpoint:    result.Endpoint,
+		Endpoint:    endpoint, // use the address we actually reached, not what peer reports
 		PublicKey:   pubBytes,
 		Status:      "active",
 	}, nil
