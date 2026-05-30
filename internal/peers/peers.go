@@ -277,7 +277,7 @@ func (m *Manager) storePeer(ctx context.Context, p *Peer) error {
 	_, err := m.db.ExecContext(ctx,
 		`INSERT INTO peers (id, display_name, endpoint, public_key, status, added_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, endpoint=excluded.endpoint, status=excluded.status, missed_pings=0`,
+		 ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, status=excluded.status, missed_pings=0`,
 		p.ID, p.DisplayName, p.Endpoint, p.PublicKey, p.Status, time.Now().UTC(),
 	)
 	return err
