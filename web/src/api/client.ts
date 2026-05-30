@@ -110,6 +110,7 @@ export interface Transfer {
   request_id: string
   peer_id: string
   item_id: string
+  item_title?: string
   status: 'queued' | 'active' | 'paused' | 'complete' | 'failed'
   bytes_total?: number
   bytes_done: number

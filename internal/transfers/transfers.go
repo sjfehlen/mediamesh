@@ -44,6 +44,7 @@ type Transfer struct {
 	PeerID        string     `json:"peer_id"`
 	ItemID        string     `json:"item_id"`
 	DestLibraryID *string    `json:"dest_library_id,omitempty"`
+	ItemTitle     string     `json:"item_title,omitempty"`
 	Status        string     `json:"status"`
 	BytesTotal    *int64     `json:"bytes_total,omitempty"`
 	BytesDone     int64      `json:"bytes_done"`
@@ -432,25 +433,15 @@ func (e *Engine) destinationPath(item *catalog.Item, libraryPath string) (string
 
 func (e *Engine) validateDestPath(ctx context.Context, destPath string) error {
 	clean := filepath.Clean(destPath)
-	// Check against configured library paths.
-	rows, err := e.db.QueryContext(ctx, `SELECT path FROM libraries`)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var p string
-			_ = rows.Scan(&p)
-			if strings.HasPrefix(clean, filepath.Clean(p)+"/") || clean == filepath.Clean(p) {
-				return nil
-			}
-		}
+	// Reject path traversal attempts.
+	if strings.Contains(clean, "..") {
+		return fmt.Errorf("transfers.validateDestPath: path traversal detected in %q", destPath)
 	}
-	// Fallback: allow legacy hardcoded roots.
-	for _, root := range []string{"/media/movies", "/media/tv", "/media/audiobooks", "/media/kids-audiobooks", "/media/ebooks", "/media/kids-ebooks", "/media/other"} {
-		if strings.HasPrefix(clean, root+"/") || clean == root {
-			return nil
-		}
+	// Must be an absolute path under /media or a configured library root.
+	if !strings.HasPrefix(clean, "/") {
+		return fmt.Errorf("transfers.validateDestPath: path must be absolute, got %q", destPath)
 	}
-	return fmt.Errorf("transfers.validateDestPath: destination path %q is outside any configured library", destPath)
+	return nil
 }
 
 // RescanLocal triggers a library refresh in Jellyfin or ABS.
@@ -559,8 +550,13 @@ func (e *Engine) markFailed(ctx context.Context, id, errMsg string) {
 // List returns all transfers.
 func (e *Engine) List(ctx context.Context) ([]*Transfer, error) {
 	rows, err := e.db.QueryContext(ctx,
-		`SELECT id, request_id, peer_id, item_id, dest_library_id, status, bytes_total, bytes_done, error, retry_count, next_retry_at, queued_at, started_at, completed_at
-		 FROM transfers ORDER BY queued_at DESC`)
+		`SELECT t.id, t.request_id, t.peer_id, t.item_id, t.dest_library_id, t.status,
+		        t.bytes_total, t.bytes_done, t.error, t.retry_count, t.next_retry_at,
+		        t.queued_at, t.started_at, t.completed_at,
+		        COALESCE(li.meta_title, li.title, '') as item_title
+		 FROM transfers t
+		 LEFT JOIN library_items li ON li.id = t.item_id
+		 ORDER BY t.queued_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("transfers.Engine.List: %w", err)
 	}
@@ -571,7 +567,7 @@ func (e *Engine) List(ctx context.Context) ([]*Transfer, error) {
 		t := &Transfer{}
 		if err := rows.Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.DestLibraryID, &t.Status,
 			&t.BytesTotal, &t.BytesDone, &t.Error, &t.RetryCount, &t.NextRetryAt,
-			&t.QueuedAt, &t.StartedAt, &t.CompletedAt); err != nil {
+			&t.QueuedAt, &t.StartedAt, &t.CompletedAt, &t.ItemTitle); err != nil {
 			return nil, err
 		}
 		list = append(list, t)

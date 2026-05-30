@@ -11,13 +11,13 @@ import { useEffect, useRef, useState } from 'react'
 import { clsx } from 'clsx'
 import { api, type Transfer } from '../api/client'
 
-function ProgressBar({ done, total }: { done: number; total?: number }) {
-  const pct = total && total > 0 ? Math.min(100, (done / total) * 100) : 0
+function ProgressBar({ done, total, complete }: { done: number; total?: number; complete?: boolean }) {
+  const pct = complete ? 100 : (total && total > 0 ? Math.min(100, (done / total) * 100) : 0)
   return (
     <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
       <div
         className="bg-blue-500 h-full transition-all"
-        style={{ width: total ? `${pct}%` : '100%' }}
+        style={{ width: `${pct}%` }}
       />
     </div>
   )
@@ -47,41 +47,46 @@ function TransferActions({ transfer }: { transfer: Transfer }) {
     mutationFn: () => api.post(`/api/transfers/${transfer.id}/pause`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['transfers'] }),
   })
-
   const resume = useMutation({
     mutationFn: () => api.post(`/api/transfers/${transfer.id}/resume`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['transfers'] }),
   })
+  const retry = useMutation({
+    mutationFn: () => api.post(`/api/transfers/${transfer.id}/retry`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['transfers'] }),
+  })
 
   return (
-    <div className="flex gap-2">
-      {transfer.status === 'active' && (
-        <button
-          onClick={() => pause.mutate()}
-          disabled={pause.isPending}
-          className="text-yellow-600 hover:underline text-xs disabled:opacity-50"
-        >
-          Pause
-        </button>
-      )}
-      {transfer.status === 'paused' && (
-        <button
-          onClick={() => resume.mutate()}
-          disabled={resume.isPending}
-          className="text-blue-600 hover:underline text-xs disabled:opacity-50"
-        >
-          Resume
-        </button>
+    <div className="flex flex-col gap-1">
+      <div className="flex gap-2">
+        {transfer.status === 'active' && (
+          <button onClick={() => pause.mutate()} disabled={pause.isPending}
+            className="text-yellow-600 hover:underline text-xs disabled:opacity-50">Pause</button>
+        )}
+        {transfer.status === 'paused' && (
+          <button onClick={() => resume.mutate()} disabled={resume.isPending}
+            className="text-blue-600 hover:underline text-xs disabled:opacity-50">Resume</button>
+        )}
+        {transfer.status === 'failed' && (
+          <button onClick={() => retry.mutate()} disabled={retry.isPending}
+            className="text-green-600 hover:underline text-xs disabled:opacity-50">Retry</button>
+        )}
+      </div>
+      {transfer.status === 'failed' && transfer.error && (
+        <p className="text-xs text-red-500 max-w-xs truncate" title={transfer.error}>{transfer.error}</p>
       )}
     </div>
   )
 }
 
 const columns = [
-  columnHelper.accessor('id', {
-    header: 'ID',
-    cell: (info) => (
-      <span className="font-mono text-xs">{info.getValue().slice(0, 8)}…</span>
+  columnHelper.display({
+    id: 'item',
+    header: 'Item',
+    cell: ({ row }) => (
+      <span className="text-sm font-medium">
+        {row.original.item_title || <span className="font-mono text-xs text-gray-400">{row.original.id.slice(0, 8)}…</span>}
+      </span>
     ),
   }),
   columnHelper.accessor('status', {
@@ -102,7 +107,7 @@ const columns = [
     header: 'Progress',
     cell: ({ row }) => (
       <div className="space-y-1 min-w-[160px]">
-        <ProgressBar done={row.original.bytes_done} total={row.original.bytes_total} />
+        <ProgressBar done={row.original.bytes_done} total={row.original.bytes_total} complete={row.original.status === 'complete'} />
         <span className="text-xs text-gray-500">
           {formatBytes(row.original.bytes_done)}
           {row.original.bytes_total ? ` / ${formatBytes(row.original.bytes_total)}` : ''}
