@@ -1,6 +1,6 @@
 import { X, HardDrive, Film, Book, Headphones, Tv, Pencil, Check, XCircle } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getItem, getPeers, submitRequest, patchItem } from '../api/client'
+import { getItem, getPeers, submitRequest, patchItem, getLibraries } from '../api/client'
 import { useState } from 'react'
 
 const mediaTypeIcons: Record<string, React.ReactNode> = {
@@ -28,6 +28,7 @@ export default function ItemDetailPanel({ itemId, onClose }: Props) {
   const queryClient = useQueryClient()
   const [requestNote, setRequestNote] = useState('')
   const [requestSent, setRequestSent] = useState(false)
+  const [destLibraryId, setDestLibraryId] = useState('')
   const [editing, setEditing] = useState(false)
   const [editTitle, setEditTitle] = useState('')
   const [editDescription, setEditDescription] = useState('')
@@ -46,8 +47,14 @@ export default function ItemDetailPanel({ itemId, onClose }: Props) {
     enabled: itemId !== null,
   })
 
+  const { data: libraries = [] } = useQuery({
+    queryKey: ['config-libraries'],
+    queryFn: getLibraries,
+    enabled: itemId !== null,
+  })
+
   const requestMutation = useMutation({
-    mutationFn: () => submitRequest(itemId!, requestNote || undefined),
+    mutationFn: () => submitRequest(itemId!, destLibraryId, requestNote || undefined),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['requests'] })
       setRequestSent(true)
@@ -160,9 +167,26 @@ export default function ItemDetailPanel({ itemId, onClose }: Props) {
                   <p className="text-green-600 text-sm font-medium">✓ Transfer queued — check Transfers page for progress.</p>
                 ) : (
                   <>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Download to library <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={destLibraryId}
+                        onChange={(e) => setDestLibraryId(e.target.value)}
+                        className="w-full border rounded-md px-3 py-2 text-sm"
+                      >
+                        <option value="">Select a library…</option>
+                        {libraries.map((lib) => (
+                          <option key={lib.id} value={lib.id}>
+                            {lib.name} ({lib.path})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     <button
                       onClick={() => requestMutation.mutate()}
-                      disabled={requestMutation.isPending}
+                      disabled={requestMutation.isPending || !destLibraryId}
                       className="bg-blue-600 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
                     >
                       {requestMutation.isPending ? 'Queuing…' : 'Download to this node'}

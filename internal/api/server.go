@@ -535,11 +535,12 @@ func (s *Server) handleRequestsList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRequestSubmit(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFromContext(r.Context())
 	var body struct {
-		ItemID       string  `json:"item_id"`
-		Note         string  `json:"note"`
-		RequestScope string  `json:"request_scope"`
-		SeriesName   *string `json:"series_name"`
-		ReqSeasonNum *int    `json:"req_season_num"`
+		ItemID        string  `json:"item_id"`
+		Note          string  `json:"note"`
+		RequestScope  string  `json:"request_scope"`
+		SeriesName    *string `json:"series_name"`
+		ReqSeasonNum  *int    `json:"req_season_num"`
+		DestLibraryID string  `json:"dest_library_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -592,7 +593,7 @@ func (s *Server) handleRequestSubmit(w http.ResponseWriter, r *http.Request) {
 					`SELECT peer_id FROM library_items WHERE id = ? AND peer_id IS NOT NULL`, body.ItemID,
 				).Scan(&peerID)
 				if peerID != "" {
-					if _, tErr := s.transfers.Enqueue(r.Context(), req.ID, peerID, body.ItemID); tErr != nil {
+					if _, tErr := s.transfers.Enqueue(r.Context(), req.ID, peerID, body.ItemID, body.DestLibraryID); tErr != nil {
 						slog.Error("auto-enqueue transfer failed", "item", body.ItemID, "err", tErr)
 					}
 				}
@@ -676,7 +677,7 @@ func (s *Server) enqueueEpisodeBatch(ctx context.Context, req *requests.Request)
 	}
 
 	for _, ep := range episodes {
-		if _, err := s.transfers.Enqueue(ctx, req.ID, ep.peerID, ep.itemID); err != nil {
+		if _, err := s.transfers.Enqueue(ctx, req.ID, ep.peerID, ep.itemID, ""); err != nil {
 			slog.Error("api.enqueueEpisodeBatch: enqueue transfer", "item_id", ep.itemID, "err", err)
 		}
 	}

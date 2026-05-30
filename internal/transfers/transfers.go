@@ -39,19 +39,20 @@ type ProgressEvent struct {
 
 // Transfer maps a transfers table row.
 type Transfer struct {
-	ID          string     `json:"id"`
-	RequestID   string     `json:"request_id"`
-	PeerID      string     `json:"peer_id"`
-	ItemID      string     `json:"item_id"`
-	Status      string     `json:"status"`
-	BytesTotal  *int64     `json:"bytes_total,omitempty"`
-	BytesDone   int64      `json:"bytes_done"`
-	Error       *string    `json:"error,omitempty"`
-	RetryCount  int        `json:"retry_count"`
-	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
-	QueuedAt    time.Time  `json:"queued_at"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	ID            string     `json:"id"`
+	RequestID     string     `json:"request_id"`
+	PeerID        string     `json:"peer_id"`
+	ItemID        string     `json:"item_id"`
+	DestLibraryID *string    `json:"dest_library_id,omitempty"`
+	Status        string     `json:"status"`
+	BytesTotal    *int64     `json:"bytes_total,omitempty"`
+	BytesDone     int64      `json:"bytes_done"`
+	Error         *string    `json:"error,omitempty"`
+	RetryCount    int        `json:"retry_count"`
+	NextRetryAt   *time.Time `json:"next_retry_at,omitempty"`
+	QueuedAt      time.Time  `json:"queued_at"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 }
 
 // EventDispatcher fires webhook events. Matches webhooks.EventDispatcher.
@@ -104,13 +105,17 @@ func (e *Engine) broadcast(evt ProgressEvent) {
 }
 
 // Enqueue creates a new queued transfer.
-func (e *Engine) Enqueue(ctx context.Context, requestID, peerID, itemID string) (*Transfer, error) {
+func (e *Engine) Enqueue(ctx context.Context, requestID, peerID, itemID, destLibraryID string) (*Transfer, error) {
 	id := uuid.New().String()
 	now := time.Now().UTC()
+	var libID interface{}
+	if destLibraryID != "" {
+		libID = destLibraryID
+	}
 	_, err := e.db.ExecContext(ctx,
-		`INSERT INTO transfers (id, request_id, peer_id, item_id, status, queued_at)
-		 VALUES (?, ?, ?, ?, 'queued', ?)`,
-		id, requestID, peerID, itemID, now,
+		`INSERT INTO transfers (id, request_id, peer_id, item_id, dest_library_id, status, queued_at)
+		 VALUES (?, ?, ?, ?, ?, 'queued', ?)`,
+		id, requestID, peerID, itemID, libID, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("transfers.Engine.Enqueue: %w", err)
@@ -237,14 +242,18 @@ func (e *Engine) executeTransfer(ctx context.Context, t *Transfer) error {
 		return fmt.Errorf("transfers.Engine.executeTransfer: peer not found: %s", t.PeerID)
 	}
 
-	// Determine destination path.
-	destPath, err := e.destinationPath(item)
+	// Determine destination path — use the chosen library if set, else fall back to media-type defaults.
+	var destLibraryPath string
+	if t.DestLibraryID != nil {
+		_ = e.db.QueryRowContext(ctx, `SELECT path FROM libraries WHERE id = ?`, *t.DestLibraryID).Scan(&destLibraryPath)
+	}
+	destPath, err := e.destinationPath(item, destLibraryPath)
 	if err != nil {
 		return fmt.Errorf("transfers.Engine.executeTransfer: destination path: %w", err)
 	}
 
 	// Path traversal check.
-	if err := e.validateDestPath(destPath); err != nil {
+	if err := e.validateDestPath(ctx, destPath); err != nil {
 		return fmt.Errorf("transfers.Engine.executeTransfer: path validation: %w", err)
 	}
 
@@ -400,7 +409,11 @@ func (e *Engine) streamWithProgress(ctx context.Context, dst io.Writer, src io.R
 	return total, nil
 }
 
-func (e *Engine) destinationPath(item *catalog.Item) (string, error) {
+func (e *Engine) destinationPath(item *catalog.Item, libraryPath string) (string, error) {
+	if libraryPath != "" {
+		return filepath.Join(libraryPath, item.RelativePath), nil
+	}
+	// Fallback: derive from media type (legacy behaviour).
 	var base string
 	switch item.MediaType {
 	case catalog.Movie:
@@ -417,15 +430,27 @@ func (e *Engine) destinationPath(item *catalog.Item) (string, error) {
 	return filepath.Join(base, item.RelativePath), nil
 }
 
-func (e *Engine) validateDestPath(destPath string) error {
-	roots := []string{"/media/movies", "/media/tv", "/media/audiobooks", "/media/kids-audiobooks", "/media/ebooks", "/media/kids-ebooks", "/media/other"}
+func (e *Engine) validateDestPath(ctx context.Context, destPath string) error {
 	clean := filepath.Clean(destPath)
-	for _, root := range roots {
+	// Check against configured library paths.
+	rows, err := e.db.QueryContext(ctx, `SELECT path FROM libraries`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var p string
+			_ = rows.Scan(&p)
+			if strings.HasPrefix(clean, filepath.Clean(p)+"/") || clean == filepath.Clean(p) {
+				return nil
+			}
+		}
+	}
+	// Fallback: allow legacy hardcoded roots.
+	for _, root := range []string{"/media/movies", "/media/tv", "/media/audiobooks", "/media/kids-audiobooks", "/media/ebooks", "/media/kids-ebooks", "/media/other"} {
 		if strings.HasPrefix(clean, root+"/") || clean == root {
 			return nil
 		}
 	}
-	return fmt.Errorf("transfers.validateDestPath: destination path %q is outside media roots", destPath)
+	return fmt.Errorf("transfers.validateDestPath: destination path %q is outside any configured library", destPath)
 }
 
 // RescanLocal triggers a library refresh in Jellyfin or ABS.
@@ -534,7 +559,7 @@ func (e *Engine) markFailed(ctx context.Context, id, errMsg string) {
 // List returns all transfers.
 func (e *Engine) List(ctx context.Context) ([]*Transfer, error) {
 	rows, err := e.db.QueryContext(ctx,
-		`SELECT id, request_id, peer_id, item_id, status, bytes_total, bytes_done, error, retry_count, next_retry_at, queued_at, started_at, completed_at
+		`SELECT id, request_id, peer_id, item_id, dest_library_id, status, bytes_total, bytes_done, error, retry_count, next_retry_at, queued_at, started_at, completed_at
 		 FROM transfers ORDER BY queued_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("transfers.Engine.List: %w", err)
@@ -544,7 +569,7 @@ func (e *Engine) List(ctx context.Context) ([]*Transfer, error) {
 	var list []*Transfer
 	for rows.Next() {
 		t := &Transfer{}
-		if err := rows.Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.Status,
+		if err := rows.Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.DestLibraryID, &t.Status,
 			&t.BytesTotal, &t.BytesDone, &t.Error, &t.RetryCount, &t.NextRetryAt,
 			&t.QueuedAt, &t.StartedAt, &t.CompletedAt); err != nil {
 			return nil, err
@@ -600,7 +625,7 @@ func (e *Engine) Retry(ctx context.Context, id string) error {
 // ListByRequestID returns all transfers for a given request.
 func (e *Engine) ListByRequestID(ctx context.Context, requestID string) ([]*Transfer, error) {
 	rows, err := e.db.QueryContext(ctx,
-		`SELECT id, request_id, peer_id, item_id, status, bytes_total, bytes_done, error, retry_count, next_retry_at, queued_at, started_at, completed_at
+		`SELECT id, request_id, peer_id, item_id, dest_library_id, status, bytes_total, bytes_done, error, retry_count, next_retry_at, queued_at, started_at, completed_at
 		 FROM transfers WHERE request_id = ? ORDER BY queued_at DESC`, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("transfers.Engine.ListByRequestID: %w", err)
@@ -610,7 +635,7 @@ func (e *Engine) ListByRequestID(ctx context.Context, requestID string) ([]*Tran
 	var list []*Transfer
 	for rows.Next() {
 		t := &Transfer{}
-		if err := rows.Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.Status,
+		if err := rows.Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.DestLibraryID, &t.Status,
 			&t.BytesTotal, &t.BytesDone, &t.Error, &t.RetryCount, &t.NextRetryAt,
 			&t.QueuedAt, &t.StartedAt, &t.CompletedAt); err != nil {
 			return nil, fmt.Errorf("transfers.Engine.ListByRequestID: scan: %w", err)
@@ -623,9 +648,9 @@ func (e *Engine) ListByRequestID(ctx context.Context, requestID string) ([]*Tran
 func (e *Engine) get(ctx context.Context, id string) (*Transfer, error) {
 	t := &Transfer{}
 	err := e.db.QueryRowContext(ctx,
-		`SELECT id, request_id, peer_id, item_id, status, bytes_total, bytes_done, error, retry_count, next_retry_at, queued_at, started_at, completed_at
+		`SELECT id, request_id, peer_id, item_id, dest_library_id, status, bytes_total, bytes_done, error, retry_count, next_retry_at, queued_at, started_at, completed_at
 		 FROM transfers WHERE id = ?`, id,
-	).Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.Status,
+	).Scan(&t.ID, &t.RequestID, &t.PeerID, &t.ItemID, &t.DestLibraryID, &t.Status,
 		&t.BytesTotal, &t.BytesDone, &t.Error, &t.RetryCount, &t.NextRetryAt,
 		&t.QueuedAt, &t.StartedAt, &t.CompletedAt)
 	if err != nil {

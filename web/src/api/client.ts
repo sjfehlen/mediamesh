@@ -158,5 +158,15 @@ export const patchItem = (id: string, patch: Partial<Pick<LibraryItem, 'meta_tit
 
 export const getPeers = () => api.get<Peer[]>('/api/peers')
 
-export const submitRequest = (itemId: string, note?: string) =>
-  api.post<Request>('/api/requests', { item_id: itemId, note })
+export const submitRequest = (itemId: string, destLibraryId: string, note?: string) =>
+  api.post<Request>('/api/requests', { item_id: itemId, dest_library_id: destLibraryId, note })
+
+export interface Library {
+  id: string
+  name: string
+  path: string
+  media_type: string
+  enabled: boolean
+}
+
+export const getLibraries = () => api.get<Library[]>('/api/config/libraries')
