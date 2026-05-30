@@ -47,6 +47,11 @@ export default function Peers() {
     mutationFn: (id: string) => api.post(`/api/peers/${id}/sync`),
   })
 
+  const rehandshake = useMutation({
+    mutationFn: (id: string) => api.post(`/api/peers/${id}/rehandshake`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['peers'] }),
+  })
+
   const patchEndpoint = useMutation({
     mutationFn: ({ id, endpoint }: { id: string; endpoint: string }) =>
       api.patch(`/api/peers/${id}`, { endpoint }),
@@ -222,6 +227,14 @@ export default function Peers() {
                       {sync.isPending ? 'Syncing…' : 'Sync Now'}
                     </button>
                   )}
+                  <button
+                    onClick={() => rehandshake.mutate(p.id)}
+                    disabled={rehandshake.isPending}
+                    className="text-yellow-600 hover:underline disabled:opacity-50"
+                    title="Re-send handshake — use if the remote peer lost its DB"
+                  >
+                    {rehandshake.isPending ? 'Registering…' : 'Re-register'}
+                  </button>
                   <button
                     onClick={() => handleRevoke(p.id)}
                     disabled={revoke.isPending}

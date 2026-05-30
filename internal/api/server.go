@@ -206,6 +206,7 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/api/peers/invite", s.handlePeerInvite)
 		r.Delete("/api/peers/{id}", s.handlePeerRevoke)
 		r.Post("/api/peers/{id}/sync", s.handlePeerSync)
+		r.Post("/api/peers/{id}/rehandshake", s.handlePeerRehandshake)
 		r.Patch("/api/peers/{id}", s.handlePeerPatch)
 
 		r.Get("/api/users", s.handleUsersList)
@@ -716,6 +717,16 @@ func (s *Server) handlePeerPatch(w http.ResponseWriter, r *http.Request) {
 		`UPDATE peers SET endpoint = ? WHERE id = ?`, body.Endpoint, id,
 	); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePeerRehandshake(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.peers.Rehandshake(r.Context(), id); err != nil {
+		slog.Error("rehandshake failed", "peer", id, "err", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

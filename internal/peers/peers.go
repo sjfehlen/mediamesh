@@ -239,6 +239,19 @@ func (m *Manager) callHandshake(ctx context.Context, endpoint string, _ ed25519.
 	}, nil
 }
 
+// Rehandshake re-sends this node's handshake to a known peer.
+// Use when the remote peer has lost its DB and no longer recognises this node.
+func (m *Manager) Rehandshake(ctx context.Context, peerID string) error {
+	peer, err := m.getByFingerprint(ctx, peerID)
+	if err != nil {
+		return fmt.Errorf("peer not found: %w", err)
+	}
+	if _, err := m.callHandshake(ctx, peer.Endpoint, nil); err != nil {
+		return fmt.Errorf("rehandshake failed: %w", err)
+	}
+	return nil
+}
+
 // Handshake is called when a remote node completes the handshake.
 func (m *Manager) Handshake(ctx context.Context, peerID, displayName, endpoint string, pubKey ed25519.PublicKey) (*Peer, error) {
 	peer := &Peer{
