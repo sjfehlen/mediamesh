@@ -188,6 +188,55 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, result)
 	})
 
+	r.Delete("/api/debug/transfers", func(w http.ResponseWriter, r *http.Request) {
+		res, err := s.db.ExecContext(r.Context(), `DELETE FROM transfers`)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		n, _ := res.RowsAffected()
+		writeJSON(w, map[string]int64{"deleted": n})
+	})
+
+	r.Delete("/api/debug/requests", func(w http.ResponseWriter, r *http.Request) {
+		res, err := s.db.ExecContext(r.Context(), `DELETE FROM requests`)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		n, _ := res.RowsAffected()
+		writeJSON(w, map[string]int64{"deleted": n})
+	})
+
+	r.Delete("/api/debug/peer-items/{peer_id}", func(w http.ResponseWriter, r *http.Request) {
+		peerID := chi.URLParam(r, "peer_id")
+		res, err := s.db.ExecContext(r.Context(), `DELETE FROM library_items WHERE peer_id = ?`, peerID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		n, _ := res.RowsAffected()
+		writeJSON(w, map[string]int64{"deleted": n})
+	})
+
+	r.Post("/api/debug/sync-all", func(w http.ResponseWriter, r *http.Request) {
+		go func() {
+			if err := s.peers.SyncAll(context.Background()); err != nil {
+				slog.Error("debug sync-all failed", "err", err)
+			}
+		}()
+		writeJSON(w, map[string]string{"status": "sync triggered"})
+	})
+
+	r.Post("/api/debug/scan", func(w http.ResponseWriter, r *http.Request) {
+		go func() {
+			if err := s.scanner.ScanAll(context.Background()); err != nil {
+				slog.Error("debug scan failed", "err", err)
+			}
+		}()
+		writeJSON(w, map[string]string{"status": "scan triggered"})
+	})
+
 	// Handshake is unauthenticated — the invite token is the proof of identity.
 	r.Post("/api/peer/handshake", s.handlePeerHandshake)
 
