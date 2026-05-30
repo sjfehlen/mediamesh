@@ -51,7 +51,7 @@ func TestWriteAndList(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	entries, err := l.List(ctx, "", "", time.Time{}, time.Time{}, 10)
+	entries, err := l.List(ctx, "", "", false, time.Time{}, time.Time{}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
