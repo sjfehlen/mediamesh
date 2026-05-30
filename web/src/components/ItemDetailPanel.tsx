@@ -26,7 +26,6 @@ interface Props {
 
 export default function ItemDetailPanel({ itemId, onClose }: Props) {
   const queryClient = useQueryClient()
-  const [requestNote, setRequestNote] = useState('')
   const [requestSent, setRequestSent] = useState(false)
   const [destLibraryId, setDestLibraryId] = useState('')
   const [editing, setEditing] = useState(false)
@@ -54,7 +53,7 @@ export default function ItemDetailPanel({ itemId, onClose }: Props) {
   })
 
   const requestMutation = useMutation({
-    mutationFn: () => submitRequest(itemId!, destLibraryId, requestNote || undefined),
+    mutationFn: () => submitRequest(itemId!, destLibraryId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['requests'] })
       setRequestSent(true)
