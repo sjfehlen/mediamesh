@@ -551,8 +551,8 @@ func (m *Manager) PeerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, err := m.VerifyRequest(r)
 		if err != nil {
-			slog.Debug("peer auth failed", "err", err)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			slog.Error("peer auth failed", "err", err, "path", r.URL.Path, "remote", r.RemoteAddr)
+			http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)

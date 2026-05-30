@@ -831,7 +831,8 @@ func (s *Server) handlePeerHandshake(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePeerCatalogGet(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.peers.VerifyRequest(r); err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		slog.Error("peer catalog GET auth failed", "err", err)
+		http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
 	push, err := s.peers.BuildCatalogPush(r.Context())
@@ -845,7 +846,8 @@ func (s *Server) handlePeerCatalogGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePeerCatalog(w http.ResponseWriter, r *http.Request) {
 	peer, err := s.peers.VerifyRequest(r)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		slog.Error("peer catalog POST auth failed", "err", err)
+		http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
 
