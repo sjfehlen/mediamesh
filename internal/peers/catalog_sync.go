@@ -164,6 +164,7 @@ func (m *Manager) ReceiveCatalog(ctx context.Context, peerID string, push Catalo
 		incomingIDs[item.ID] = true
 	}
 
+	var inserted, updated int
 	for _, item := range push.Items {
 		var exists bool
 		_ = m.db.QueryRowContext(ctx, `SELECT 1 FROM library_items WHERE id = ?`, item.ID).Scan(&exists)
@@ -172,7 +173,9 @@ func (m *Manager) ReceiveCatalog(ctx context.Context, peerID string, push Catalo
 				`UPDATE library_items SET last_seen = ?, file_size = ?, catalog_version = ? WHERE id = ?`,
 				now, item.FileSize, item.CatalogVersion, item.ID)
 			if err != nil {
-				slog.Error("update peer item", "err", err)
+				slog.Error("update peer item", "id", item.ID, "err", err)
+			} else {
+				updated++
 			}
 			continue
 		}
@@ -185,9 +188,20 @@ func (m *Manager) ReceiveCatalog(ctx context.Context, peerID string, push Catalo
 			item.PosterURL, item.Description, now, item.CatalogVersion,
 		)
 		if err != nil {
-			slog.Error("insert peer item", "err", err)
+			slog.Error("insert peer item", "id", item.ID, "media_type", item.MediaType, "err", err)
+		} else {
+			inserted++
 		}
 	}
+
+	slog.Info("catalog received", "peer", peerID, "inserted", inserted, "updated", updated, "total", len(push.Items))
+	_ = m.audit.Write(ctx, audit.Entry{
+		ActorType:  "system",
+		Action:     "catalog.received",
+		TargetType: "peer",
+		TargetID:   peerID,
+		Detail:     fmt.Sprintf("inserted=%d updated=%d total=%d", inserted, updated, len(push.Items)),
+	})
 
 	// For full syncs, mark items from this peer that weren't in the push as removed.
 	if !push.IsDelta {
