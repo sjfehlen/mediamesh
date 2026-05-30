@@ -577,6 +577,29 @@ func (s *Server) handleRequestSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// If this is a request for an item that exists on a peer, auto-approve and
+	// enqueue the transfer immediately — no admin approval needed.
+	if body.ItemID != "" {
+		approved, approveErr := s.requests.Approve(r.Context(), req.ID, u.ID, "auto-approved")
+		if approveErr == nil {
+			req = approved
+			if req.RequestScope == "season" || req.RequestScope == "series" {
+				_ = s.enqueueEpisodeBatch(r.Context(), req)
+			} else {
+				var peerID string
+				_ = s.db.QueryRowContext(r.Context(),
+					`SELECT peer_id FROM library_items WHERE id = ? AND peer_id IS NOT NULL`, body.ItemID,
+				).Scan(&peerID)
+				if peerID != "" {
+					if _, tErr := s.transfers.Enqueue(r.Context(), req.ID, peerID, body.ItemID); tErr != nil {
+						slog.Error("auto-enqueue transfer failed", "item", body.ItemID, "err", tErr)
+					}
+				}
+			}
+		}
+	}
+
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, req)
 }
