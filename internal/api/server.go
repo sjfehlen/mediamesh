@@ -925,7 +925,8 @@ func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		to, _ = time.Parse(time.RFC3339, t)
 	}
 
-	entries, err := s.audit.List(r.Context(), actorID, action, from, to, limit)
+	errorsOnly := q.Get("errors_only") == "true"
+	entries, err := s.audit.List(r.Context(), actorID, action, errorsOnly, from, to, limit)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

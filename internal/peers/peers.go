@@ -167,11 +167,21 @@ func (m *Manager) AcceptInvite(ctx context.Context, tokenStr, endpointOverride s
 		slog.Info("starting initial catalog sync", "peer", peer.ID, "endpoint", peer.Endpoint)
 		if err := m.PushCatalog(bgCtx, peer); err != nil {
 			slog.Error("initial catalog push failed", "peer", peer.ID, "err", err)
+			_ = m.audit.Write(bgCtx, audit.Entry{
+				ActorType: "system", Action: "catalog.push_failed",
+				TargetType: "peer", TargetID: peer.ID,
+				Detail: err.Error(), ErrorCode: audit.ErrSyncPushFailed,
+			})
 		} else {
 			slog.Info("initial catalog push done", "peer", peer.ID)
 		}
 		if err := m.PullCatalog(bgCtx, peer); err != nil {
 			slog.Error("initial catalog pull failed", "peer", peer.ID, "err", err)
+			_ = m.audit.Write(bgCtx, audit.Entry{
+				ActorType: "system", Action: "catalog.pull_failed",
+				TargetType: "peer", TargetID: peer.ID,
+				Detail: err.Error(), ErrorCode: audit.ErrSyncPullFailed,
+			})
 		} else {
 			slog.Info("initial catalog pull done", "peer", peer.ID)
 		}
@@ -467,6 +477,8 @@ func (m *Manager) pingAllPeers(ctx context.Context) {
 					Action:     "peer.unreachable",
 					TargetType: "peer",
 					TargetID:   p.ID,
+					Detail:     p.Endpoint,
+					ErrorCode:  audit.ErrPeerUnreachable,
 				})
 			}
 			_, dbErr := m.db.ExecContext(ctx,

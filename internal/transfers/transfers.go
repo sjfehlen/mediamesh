@@ -504,12 +504,19 @@ func (e *Engine) markFailed(ctx context.Context, id, errMsg string) {
 
 	_, _ = e.db.ExecContext(ctx,
 		`UPDATE transfers SET status = 'failed', error = ? WHERE id = ?`, errMsg, id)
+	errCode := audit.ErrTransferFailed
+	if strings.Contains(errMsg, "duplicate_detected") {
+		errCode = audit.ErrTransferDuplicate
+	} else if strings.Contains(errMsg, "no space") || strings.Contains(errMsg, "disk full") {
+		errCode = audit.ErrTransferDiskFull
+	}
 	_ = e.audit.Write(ctx, audit.Entry{
 		ActorType:  "system",
 		Action:     "transfer.failed",
 		TargetType: "transfer",
 		TargetID:   id,
 		Detail:     errMsg,
+		ErrorCode:  errCode,
 	})
 	e.broadcast(ProgressEvent{
 		Type:       "transfer.status",

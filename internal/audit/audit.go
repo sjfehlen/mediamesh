@@ -10,6 +10,21 @@ import (
 	"github.com/google/uuid"
 )
 
+// Error codes for classifying failure audit entries.
+const (
+	ErrPeerUnreachable    = "PEER_UNREACHABLE"
+	ErrPeerAuthFailed     = "PEER_AUTH_FAILED"
+	ErrSyncPushFailed     = "SYNC_PUSH_FAILED"
+	ErrSyncPullFailed     = "SYNC_PULL_FAILED"
+	ErrTransferFailed     = "TRANSFER_FAILED"
+	ErrTransferDuplicate  = "TRANSFER_DUPLICATE"
+	ErrTransferDiskFull   = "TRANSFER_DISK_FULL"
+	ErrScanFailed         = "SCAN_FAILED"
+	ErrMetadataFailed     = "METADATA_FAILED"
+	ErrHandshakeFailed    = "HANDSHAKE_FAILED"
+	ErrAuthFailed         = "AUTH_FAILED"
+)
+
 // Entry describes a single audit event.
 type Entry struct {
 	ActorID    string
@@ -18,6 +33,7 @@ type Entry struct {
 	TargetType string
 	TargetID   string
 	Detail     string
+	ErrorCode  string // non-empty for failure events
 }
 
 // Log is an append-only audit writer backed by SQLite.
@@ -30,20 +46,18 @@ func New(db *sql.DB) *Log {
 	return &Log{db: db}
 }
 
-// Write inserts a new audit log entry. It never returns an error that
-// should crash the caller — failures are logged and swallowed.
+// Write inserts a new audit log entry. Failures are logged and swallowed.
 func (l *Log) Write(ctx context.Context, e Entry) error {
 	id := uuid.New().String()
 	_, err := l.db.ExecContext(ctx,
-		`INSERT INTO audit_log (id, actor_id, actor_type, action, target_type, target_id, detail, occurred_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO audit_log (id, actor_id, actor_type, action, target_type, target_id, detail, error_code, occurred_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, nullIfEmpty(e.ActorID), e.ActorType, e.Action,
 		nullIfEmpty(e.TargetType), nullIfEmpty(e.TargetID), nullIfEmpty(e.Detail),
-		time.Now().UTC(),
+		nullIfEmpty(e.ErrorCode), time.Now().UTC(),
 	)
 	if err != nil {
 		slog.Error("audit write failed", "err", err, "action", e.Action)
-		// swallow — never crash caller
 	}
 	return nil
 }
@@ -64,13 +78,15 @@ type AuditEntry struct {
 	TargetType string    `json:"target_type"`
 	TargetID   string    `json:"target_id"`
 	Detail     string    `json:"detail"`
+	ErrorCode  string    `json:"error_code,omitempty"`
 	OccurredAt time.Time `json:"occurred_at"`
 }
 
 // List returns audit entries with optional filters.
-func (l *Log) List(ctx context.Context, actorID, action string, from, to time.Time, limit int) ([]*AuditEntry, error) {
+func (l *Log) List(ctx context.Context, actorID, action string, errorsOnly bool, from, to time.Time, limit int) ([]*AuditEntry, error) {
 	query := `SELECT id, COALESCE(actor_id,''), actor_type, action,
-		COALESCE(target_type,''), COALESCE(target_id,''), COALESCE(detail,''), occurred_at
+		COALESCE(target_type,''), COALESCE(target_id,''), COALESCE(detail,''),
+		COALESCE(error_code,''), occurred_at
 		FROM audit_log WHERE 1=1`
 	args := []interface{}{}
 
@@ -81,6 +97,9 @@ func (l *Log) List(ctx context.Context, actorID, action string, from, to time.Ti
 	if action != "" {
 		query += " AND action = ?"
 		args = append(args, action)
+	}
+	if errorsOnly {
+		query += " AND error_code IS NOT NULL"
 	}
 	if !from.IsZero() {
 		query += " AND occurred_at >= ?"
@@ -105,7 +124,7 @@ func (l *Log) List(ctx context.Context, actorID, action string, from, to time.Ti
 	for rows.Next() {
 		e := &AuditEntry{}
 		if err := rows.Scan(&e.ID, &e.ActorID, &e.ActorType, &e.Action,
-			&e.TargetType, &e.TargetID, &e.Detail, &e.OccurredAt); err != nil {
+			&e.TargetType, &e.TargetID, &e.Detail, &e.ErrorCode, &e.OccurredAt); err != nil {
 			return nil, fmt.Errorf("scan audit row: %w", err)
 		}
 		entries = append(entries, e)

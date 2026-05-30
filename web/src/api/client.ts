@@ -147,6 +147,7 @@ export interface AuditEntry {
   target_type: string
   target_id: string
   detail: string
+  error_code?: string
   occurred_at: string
 }
 

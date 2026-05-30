@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/sjfehlen/mediamesh/internal/audit"
 	"github.com/sjfehlen/mediamesh/internal/catalog"
 )
 
@@ -258,6 +259,19 @@ func (m *Manager) SyncAll(ctx context.Context) error {
 		}
 		if err := m.PushCatalog(ctx, p); err != nil {
 			slog.Error("push catalog to peer failed", "peer", p.ID, "err", err)
+			_ = m.audit.Write(ctx, audit.Entry{
+				ActorType: "system", Action: "catalog.push_failed",
+				TargetType: "peer", TargetID: p.ID,
+				Detail: err.Error(), ErrorCode: audit.ErrSyncPushFailed,
+			})
+		}
+		if err := m.PullCatalog(ctx, p); err != nil {
+			slog.Error("pull catalog from peer failed", "peer", p.ID, "err", err)
+			_ = m.audit.Write(ctx, audit.Entry{
+				ActorType: "system", Action: "catalog.pull_failed",
+				TargetType: "peer", TargetID: p.ID,
+				Detail: err.Error(), ErrorCode: audit.ErrSyncPullFailed,
+			})
 		}
 	}
 	return nil
