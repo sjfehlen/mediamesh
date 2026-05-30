@@ -239,7 +239,7 @@ func (m *Manager) callHandshake(ctx context.Context, endpoint string, _ ed25519.
 	}, nil
 }
 
-// Rehandshake re-sends this node's handshake to a known peer.
+// Rehandshake re-sends this node's handshake to a known peer then syncs catalogs.
 // Use when the remote peer has lost its DB and no longer recognises this node.
 func (m *Manager) Rehandshake(ctx context.Context, peerID string) error {
 	peer, err := m.getByFingerprint(ctx, peerID)
@@ -249,10 +249,22 @@ func (m *Manager) Rehandshake(ctx context.Context, peerID string) error {
 	if _, err := m.callHandshake(ctx, peer.Endpoint, nil); err != nil {
 		return fmt.Errorf("rehandshake failed: %w", err)
 	}
+	// Sync catalogs now that the remote knows us again.
+	go func() {
+		time.Sleep(1 * time.Second)
+		bgCtx := context.Background()
+		if err := m.PushCatalog(bgCtx, peer); err != nil {
+			slog.Error("post-rehandshake push failed", "peer", peerID, "err", err)
+		}
+		if err := m.PullCatalog(bgCtx, peer); err != nil {
+			slog.Error("post-rehandshake pull failed", "peer", peerID, "err", err)
+		}
+	}()
 	return nil
 }
 
-// Handshake is called when a remote node completes the handshake.
+// Handshake is called when a remote node connects. Stores the peer and
+// triggers an async catalog push so the connecting node gets our items immediately.
 func (m *Manager) Handshake(ctx context.Context, peerID, displayName, endpoint string, pubKey ed25519.PublicKey) (*Peer, error) {
 	peer := &Peer{
 		ID:          peerID,
@@ -270,6 +282,16 @@ func (m *Manager) Handshake(ctx context.Context, peerID, displayName, endpoint s
 		TargetType: "peer",
 		TargetID:   peerID,
 	})
+	// Push our catalog to the connecting peer so they get our items without
+	// needing a separate sync step.
+	go func() {
+		time.Sleep(1 * time.Second)
+		if err := m.PushCatalog(context.Background(), peer); err != nil {
+			slog.Error("post-handshake catalog push failed", "peer", peerID, "err", err)
+		} else {
+			slog.Info("post-handshake catalog push done", "peer", peerID)
+		}
+	}()
 	return peer, nil
 }
 
