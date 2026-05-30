@@ -383,9 +383,9 @@ func (m *Manager) VerifyRequest(r *http.Request) (*Peer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("peer not found: %w", err)
 	}
-	if peer.Status != "active" {
-		return nil, fmt.Errorf("peer not active")
-	}
+	// Do not check peer.Status here — a peer marked unreachable (because we
+	// can't reach them outbound) must still be able to send us authenticated
+	// requests inbound.
 
 	pubKey := ed25519.PublicKey(peer.PublicKey)
 	verified, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {

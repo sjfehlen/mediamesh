@@ -150,6 +150,19 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, result)
 	})
 
+	r.Get("/api/debug/catalog-push", func(w http.ResponseWriter, r *http.Request) {
+		push, err := s.peers.BuildCatalogPush(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"item_count":     len(push.Items),
+			"sender_version": push.SenderVersion,
+			"sample":         push.Items[:min(3, len(push.Items))],
+		})
+	})
+
 	r.Get("/api/debug/items", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := s.db.QueryContext(r.Context(),
 			`SELECT COALESCE(peer_id,'LOCAL') as peer, COALESCE(library_id,'NULL') as lib,
