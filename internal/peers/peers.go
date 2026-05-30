@@ -11,7 +11,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -40,8 +39,6 @@ type Manager struct {
 	cfg      *config.Config
 	audit    *audit.Log
 
-	mu       sync.Mutex
-	seenJTIs map[string]time.Time // jti -> expiry, for replay prevention
 }
 
 // New creates a new peer Manager.
@@ -51,9 +48,7 @@ func New(db *sql.DB, id *identity.Identity, cfg *config.Config, a *audit.Log) *M
 		identity: id,
 		cfg:      cfg,
 		audit:    a,
-		seenJTIs: make(map[string]time.Time),
 	}
-	go m.cleanJTIs()
 	return m
 }
 
@@ -377,7 +372,6 @@ func (m *Manager) VerifyRequest(r *http.Request) (*Peer, error) {
 		return nil, fmt.Errorf("invalid claims")
 	}
 	fingerprint, _ := claims["iss"].(string)
-	jti, _ := claims["jti"].(string)
 
 	peer, err := m.getByFingerprint(r.Context(), fingerprint)
 	if err != nil {
@@ -398,11 +392,6 @@ func (m *Manager) VerifyRequest(r *http.Request) (*Peer, error) {
 		return nil, fmt.Errorf("invalid peer token: %w", err)
 	}
 
-	// Replay prevention.
-	if err := m.checkJTI(jti, time.Now().Add(5*time.Minute)); err != nil {
-		return nil, err
-	}
-
 	return peer, nil
 }
 
@@ -417,28 +406,6 @@ func (m *Manager) getByFingerprint(ctx context.Context, fp string) (*Peer, error
 	return p, err
 }
 
-func (m *Manager) checkJTI(jti string, exp time.Time) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, seen := m.seenJTIs[jti]; seen {
-		return fmt.Errorf("replay detected: jti already seen")
-	}
-	m.seenJTIs[jti] = exp
-	return nil
-}
-
-func (m *Manager) cleanJTIs() {
-	for range time.Tick(time.Minute) {
-		now := time.Now()
-		m.mu.Lock()
-		for jti, exp := range m.seenJTIs {
-			if now.After(exp) {
-				delete(m.seenJTIs, jti)
-			}
-		}
-		m.mu.Unlock()
-	}
-}
 
 // StartHeartbeat starts a background goroutine that pings all active/unreachable peers every 60 seconds.
 func (m *Manager) StartHeartbeat(ctx context.Context) {
